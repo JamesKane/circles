@@ -24,6 +24,8 @@ final class AppModel {
         let circles: CirclesScreenModel
         let settings: SettingsScreenModel
         let media: MediaLoader
+        /// Sleep, wake, network changes and App Nap.
+        let lifecycle: NetworkLifecycle
     }
 
     private(set) var phase: Phase = .loading
@@ -68,19 +70,24 @@ final class AppModel {
     func start(_ account: Account) {
         if case .ready = phase { return }
         let services = MacServices()
-        let session = Session(account: account, network: NetworkModel(account: account),
+        let network = NetworkModel(account: account)
+        let session = Session(account: account, network: network,
                               stream: StreamScreenModel(account: account),
                               people: PeopleScreenModel(account: account, services: services),
                               circles: CirclesScreenModel(account: account),
                               settings: SettingsScreenModel(account: account, services: services),
-                              media: MediaLoader(account: account))
+                              media: MediaLoader(account: account),
+                              lifecycle: NetworkLifecycle(network: network))
         phase = .ready(session)
         session.network.send(.start)
+        session.lifecycle.start()
     }
 
     /// Stops the network, giving up after a few seconds so quitting can't hang.
     func shutdown() async {
-        guard let network else { return }
+        guard let session else { return }
+        session.lifecycle.stop()
+        let network = session.network
         await withTaskGroup(of: Void.self) { group in
             group.addTask { await network.perform(.stop) }
             group.addTask { try? await Task.sleep(for: .seconds(3)) }
