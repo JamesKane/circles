@@ -43,7 +43,9 @@ jobs:
 
   macos:
     name: macOS
-    runs-on: macos-15
+    # swift-crypto 5's BoringSSL wrapper (built for _CryptoExtras) uses
+    # Data.mutableBytes, which needs the macOS 26 SDK.
+    runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
       - uses: compnerd/gha-setup-swift@main
