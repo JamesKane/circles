@@ -20,6 +20,7 @@ let package = Package(
         .library(name: "CirclesKit", targets: ["CirclesKit"]),
         .library(name: "CirclesMLS", targets: ["CirclesMLS"]),
         .library(name: "CirclesDHT", targets: ["CirclesDHT"]),
+        .library(name: "CirclesPush", targets: ["CirclesPush"]),
         .library(name: "CirclesPresentation", targets: ["CirclesPresentation"]),
         .executable(name: "circles", targets: ["circles-cli"]),
         .executable(name: "circles-pod", targets: ["circles-pod"]),
@@ -70,6 +71,13 @@ let package = Package(
         .target(
             name: "CirclesStorage",
             dependencies: ["CirclesCore", "CirclesCrypto", "CirclesSync", "CSQLite"],
+            swiftSettings: swiftSettings
+        ),
+        .target(
+            name: "CirclesPush",
+            dependencies: ["CirclesCore", "CirclesCrypto", "CirclesSync", "CirclesNet", "CirclesStorage",
+                           .product(name: "Crypto", package: "swift-crypto"),
+                           .product(name: "_CryptoExtras", package: "swift-crypto")],
             swiftSettings: swiftSettings
         ),
         .target(
@@ -149,6 +157,12 @@ let package = Package(
         .testTarget(
             name: "CirclesPresentationTests",
             dependencies: ["CirclesPresentation", "CirclesNet"],
+            swiftSettings: swiftSettings
+        ),
+        .testTarget(
+            name: "CirclesPushTests",
+            dependencies: ["CirclesPush", "CirclesNet", .product(name: "Crypto", package: "swift-crypto"),
+                           .product(name: "_CryptoExtras", package: "swift-crypto")],
             swiftSettings: swiftSettings
         ),
         .testTarget(
