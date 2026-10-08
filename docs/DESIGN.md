@@ -566,6 +566,10 @@ Enforcement:
     - `OnboardingScreenModel`, `PeopleScreenModel` (invite exchange) and `SettingsScreenModel` (identity, pods, relays)
   - **New GNOME pages** for each, and quitting stops the network first, so the mDNS goodbye and port-mapping removal go out.
   - **The self-test** (`--snapshot` on an empty home) walks the first-run journey through real widgets: onboarding, adding a contact by pasting their invite, an **incoming sync updating the Stream on its own**, settings, posting, and +1.
+- **Packaging (on `gnome/polish`):**
+  - The desktop entry (`dev.circles.Circles.desktop`, matching the app ID so notifications work), AppStream metadata and app icons are validated with `desktop-file-validate` and `appstreamcli`.
+  - `install.sh` makes a release build with the Swift runtime linked statically, so it needs only GTK 4, libadwaita and SQLite at run time. It was verified by installing into a scratch prefix and running the self-test through the installed launcher.
+  - The Flatpak manifest targets GNOME 51 with the swift6 SDK extension but hasn't been built yet. Flathub will need vendored SwiftPM dependencies.
 - **Wrapper lesson:** GObject `notify::` signals have an extra parameter. `GtkKit.onNotify` handles them, and the plain `connect` refuses them, after a mismatched handler crashed the Settings page.
 
 #### Main-thread integration

@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Circles
+GenericName=Social Network
+Comment=Share with the people a post is for, without a central server
+Exec=circles-gnome
+Icon=dev.circles.Circles
+Terminal=false
+Categories=Network;InstantMessaging;GTK;
+Keywords=social;circles;peer-to-peer;privacy;
+StartupNotify=true

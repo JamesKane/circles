@@ -69,6 +69,14 @@ Apps/Gnome/.build/debug/CirclesGnome   # uses $CIRCLES_HOME or ~/.circles
 
 The app walks you through creating an identity, exchanging invites, circles, pods and relays, and stays online while it's open (no `circles serve` needed).
 
+To install it for your user (desktop entry, icon, and a `circles-gnome` command; only GTK 4, libadwaita and SQLite are needed at run time):
+
+```sh
+Apps/Gnome/install.sh              # into ~/.local; --uninstall to remove
+```
+
+A Flatpak manifest is in `Apps/Gnome/dev.circles.Circles.yml` (not yet built; see the notes in it).
+
 ## Layout
 
 - `Sources/CirclesCore`: identifiers, deterministic CBOR, hybrid logical

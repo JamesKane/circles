@@ -33,6 +33,7 @@ final class AppController {
     func activate(home: URL) async {
         Style.loadCSS()
         Style.loadIcons()
+        gtk_window_set_default_icon_name("dev.circles.Circles")
         window = adw_application_window_new(g(application))!
         gtk_window_set_title(g(window), "Circles")
         gtk_window_set_default_size(g(window), 760, 900)

@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>dev.circles.Circles</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>BSD-3-Clause</project_license>
+  <name>Circles</name>
+  <summary>Share with the people a post is for</summary>
+  <description>
+    <p>
+      Circles is a peer-to-peer social network built around circles: you choose exactly
+      who each post is for, and only they can read it. There is no central server. Your
+      identity lives on your device, posts are end-to-end encrypted to their audience,
+      and devices sync directly, through your own always-on pod, or through relays that
+      only ever see encrypted data.
+    </p>
+    <ul>
+      <li>Post to circles or publicly, with photos</li>
+      <li>Comment, +1 and reshare; authors moderate their own threads</li>
+      <li>Find contacts on the local network automatically</li>
+      <li>Keep posts available while you're offline with a pod you run</li>
+    </ul>
+  </description>
+  <launchable type="desktop-id">dev.circles.Circles.desktop</launchable>
+  <url type="homepage">https://github.com/JamesKane/circles</url>
+  <url type="bugtracker">https://github.com/JamesKane/circles/issues</url>
+  <url type="vcs-browser">https://github.com/JamesKane/circles</url>
+  <developer id="dev.circles">
+    <name>James Kane</name>
+  </developer>
+  <content_rating type="oars-1.1">
+    <content_attribute id="social-chat">intense</content_attribute>
+    <content_attribute id="social-info">intense</content_attribute>
+  </content_rating>
+  <supports>
+    <control>pointing</control>
+    <control>keyboard</control>
+  </supports>
+  <requires>
+    <display_length compare="ge">360</display_length>
+  </requires>
+  <releases>
+    <release version="0.1.0" date="2026-10-08">
+      <description>
+        <p>First GNOME release: circles, photos, comments, +1s, reshares, pods and relays.</p>
+      </description>
+    </release>
+  </releases>
+</component>
