@@ -103,6 +103,9 @@ public enum CommunityContent: Sendable, Hashable {
     case item(CommunityItem)
     /// The owner removing an item (moderation).
     case deletion(ContentID)
+    /// Members' identity documents, so members who aren't each other's
+    /// contacts can still show each other's names.
+    case identities([SignedObject])
 }
 
 /// A record in a community's log.
@@ -130,6 +133,7 @@ extension CommunityContent: Codable {
         case 0: self = .members(added: try container.decode([UserID].self), removed: try container.decode([UserID].self))
         case 1: self = .item(try container.decode(CommunityItem.self))
         case 2: self = .deletion(try container.decode(ContentID.self))
+        case 3: self = .identities(try container.decode([SignedObject].self))
         case let tag: throw CBORError.custom("unknown community content tag \(tag)")
         }
         guard container.isAtEnd else { throw CBORError.custom("trailing fields in community content") }
@@ -148,6 +152,9 @@ extension CommunityContent: Codable {
         case .deletion(let target):
             try container.encode(UInt64(2))
             try container.encode(target)
+        case .identities(let documents):
+            try container.encode(UInt64(3))
+            try container.encode(documents)
         }
     }
 }

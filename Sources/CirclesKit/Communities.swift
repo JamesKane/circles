@@ -199,6 +199,7 @@ extension Account {
         }
         try await refreshCommunityEndpoints()   // certifies our pods
         try await appendToLog(.community(.profile(signedProfile)), as: community)
+        try await publish(.identities([identityDocument]), in: community)
         try await publish(.members(added: [user], removed: []), in: community)
         return community
     }
@@ -360,6 +361,12 @@ extension Account {
         // New members of a private community can't read earlier roster
         // changes, so the announcement names everyone.
         let added = profile.visibility == .private ? state.roster + users.filter { !state.roster.contains($0) } : users
+        var documents: [SignedObject] = []
+        for member in added {
+            if member == user { documents.append(identityDocument) }
+            else if let document = try await store.identityDocument(for: member) { documents.append(document) }
+        }
+        if !documents.isEmpty { try await publish(.identities(documents), in: community) }
         try await publish(.members(added: added, removed: []), in: community)
     }
 
@@ -632,7 +639,7 @@ extension Account {
             switch stored.content {
             case .deletion(let id):
                 removed.insert(id)
-            case .members:
+            case .members, .identities:
                 continue
             case .item(let item):
                 let contribution = item.contribution
@@ -663,12 +670,29 @@ extension Account {
         return posts.sorted { $0.created > $1.created }
     }
 
+    /// The account that owns a community.
+    public func communityOwner(_ community: UserID) throws -> UserID? {
+        try self.community(community).decodedProfile?.owner
+    }
+
     /// Who's in a community, by name where we know it.
     public func communityMembers(_ community: UserID) async throws -> [(user: UserID, name: String)] {
+        let state = try self.community(community)
+        // Identity documents the community published, newest last.
+        var published: [UserID: VerifiedIdentity] = [:]
+        for stored in state.contents {
+            guard case .identities(let documents) = stored.content else { continue }
+            for document in documents {
+                guard let claimed = try? CBORDecoder().decode(IdentityDocument.self, from: document.payload),
+                      let verified = try? VerifiedIdentity(verifying: document, for: claimed.user)
+                else { continue }
+                published[claimed.user] = verified
+            }
+        }
         var members: [(UserID, String)] = []
-        for member in try self.community(community).roster {
-            let identity = try? await store.verifiedIdentity(for: member)
-            members.append((member, displayName(of: member, identity: identity ?? nil)))
+        for member in state.roster {
+            let stored = (try? await store.verifiedIdentity(for: member)) ?? nil
+            members.append((member, displayName(of: member, identity: stored ?? published[member])))
         }
         return members
     }

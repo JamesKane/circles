@@ -14,7 +14,7 @@ struct Circles: AsyncParsableCommand {
         subcommands: [Init.self, WhoAmI.self, InviteCommand.self, ContactCommand.self, CircleCommand.self,
                       PostCommand.self, StreamCommand.self, Serve.self, SyncCommand.self, Peers.self,
                       PodCommand.self, RelayCommand.self, CommentCommand.self, PlusOneCommand.self,
-                      ReshareCommand.self, AttachmentCommand.self]
+                      ReshareCommand.self, AttachmentCommand.self, CommunityCommand.self]
     )
 }
 

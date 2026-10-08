@@ -139,7 +139,8 @@ public struct NodeService: Sendable {
 
     private static func name(of user: UserID?, in account: Account) async -> String {
         guard let user else { return "unknown peer" }
-        return await account.name(of: user)
+        // Peers who aren't contacts (community members) by their own name.
+        return await account.displayName(of: user, identity: try? await account.store.verifiedIdentity(for: user))
     }
 }
 
