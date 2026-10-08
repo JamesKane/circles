@@ -636,14 +636,9 @@ Screen models are `@MainActor`. On Apple platforms, the main actor already runs 
 2. **Adwaita for Swift's maintenance.** Mitigation: keep the GNOME backend thin, and be ready to swap to raw GTK C interop.
 3. **Three or four native UIs is real cost.** This is why the presentation layer has to absorb all logic. A backend should contain layout, styling, and platform conventions, and nothing else. If a backend needs an `if`, ask whether it belongs in the screen model.
 
-## 12. Security and Threat Model (initial)
+## 12. Security and Threat Model
 
-**Adversaries considered:**
-1. A passive network observer
-2. A malicious relay or DHT node
-3. A compromised pod (sees ciphertext and metadata only)
-4. A malicious contact (can leak what they're shown, which no system prevents)
-5. Spammers and Sybils
+*Reviewed in M7 (2026-10-08) against the code as built, with fuzzing and a 10,000-node DHT simulation. This is our own review; the protocol still gets an independent one before any "1.0" label.*
 
 **Key properties:**
 - Content authenticity: every object is signed by a device key, which is certified by the identity key.
@@ -651,12 +646,64 @@ Screen models are `@MainActor`. On Apple platforms, the main actor already runs 
 - Forward secrecy on transport sessions. Post-compromise security for communities (via MLS). Circle keys get it on rotation.
 - Device revocation propagates through the identity document, and contacts reject objects signed by revoked keys after the revocation timestamp.
 
-**Known weak spots to address:**
-- Metadata (§8.4)
-- DHT eclipse and Sybil attacks: mitigate with multiple bootstrap sets, S/Kademlia-style disjoint lookups, and preferring contact-provided addresses over the DHT.
-- Spam on first contact: postage tokens, contact-of-contact allowances, and user-level allowlists.
+### 12.1 Adversaries, what stops them, and what's open
 
-The protocol will get an independent review before any "1.0" label.
+| Adversary | Can try | What stops it | Open |
+|---|---|---|---|
+| **Passive network observer** | Read traffic; map who talks to whom | Noise XX on every connection (relayed ones end to end); padded envelopes (Padmé) | IPs and timing are visible (§8.4); no cover traffic; mDNS announces the user ID on the local network |
+| **Malicious relay** | Read, alter or impersonate | Peers' Noise sessions run end to end through it, with keys pinned; reservations only for keys a client proves | Learns who connects to whom and when; per-relay limits only (reservations, circuit time and bytes) |
+| **Malicious DHT node, Sybils, eclipse** | Hide or roll back records; steer lookups; flood stores | Records verify themselves and only move forward; lookups take the newest from every responder; node IDs bound to Noise keys; contacts recorded at observed addresses; **3 disjoint lookup paths** (S/Kademlia); 60 stores per IP per hour; full nodes keep the records closest to them | Keys are free, so Sybils are cheap: with 30% of nodes attacking, 8.5% of lookups still fail (§12.3). No proof-of-work node IDs. Contact-provided addresses are tried first, so the DHT is a fallback, not the root of trust |
+| **Compromised pod** | Read, alter, withhold | Holds ciphertext only; entries are signed and hash-linked, so alteration and reordering are detected | Learns the owner's contacts and the rosters of the owner's private communities (by design, §8.3); can withhold or delay; knows push handles |
+| **Malicious push relay** | Learn activity, spam wake-ups | Content-free pings; handles are random and given only to the owner's pods; pings coalesced; no answer reveals whether a handle exists | Learns device tokens and which pod IPs ping when |
+| **Malicious contact** | Leak content; exhaust resources | Nothing prevents leaking what one is shown. Resources: 16 MiB messages, batched sync, ≤1024 blobs per session, **≤256 wraps per envelope** (trial decryption stays cheap) | Can still fill our disk with signed entries in their own log (bounded only by what we keep); key-grant spam costs one HPKE trial per entry |
+| **Malicious community member** | Disrupt the community; impersonate | Submissions are verified against the member's own signature before republishing; the owner removes members and items; MLS removal locks a member out of what follows; **join requests expire after an hour** (no replay) | One sequencer: the owner is a single point of control and availability; no moderator roles yet |
+| **Stolen device** | Post as the user | Revocation in the identity document; verifiers reject the device's signatures at or after the revocation time | Verification uses the timestamp an entry *claims*, so a revoked device can still backdate new entries to before its revocation. Needs "first seen" times recorded by readers |
+| **Anyone reaching a listener** | Exhaust connections, hold sessions, burn CPU on handshakes | **≤512 connections, ≤32 per IP, a per-IP token bucket (10/s, bursts of 40), refused before the handshake; sessions closed after 2 minutes idle**; 10 s handshake timeout | Distributed sources (botnets) aren't limited per IP |
+| **Malformed input anywhere** | Crash or hang a parser | Strict deterministic CBOR (depth limit, lengths checked before allocation, canonical-only); every parser and handler fuzzed (§12.2) | swift-mls is pre-release; it survived fuzzing here but hasn't had an audit |
+
+### 12.2 Fuzzing
+
+Nine targets in `Sources/CirclesFuzz` take arbitrary bytes and must neither crash nor hang:
+- **CBOR:** anything that parses re-encodes byte for byte.
+- **Wire types:** decode → encode → decode is stable.
+- **Checking:** signatures, certificates and envelopes.
+- **Protocols:** the Noise handshake, every pasteable text, the DHT and push handlers, and a whole sync session.
+- **swift-mls:** untrusted commits, Welcomes, application messages and KeyPackages.
+
+The regular test suite runs all nine under seeded, reproducible mutation on every platform. `Fuzz/run.sh` drives them with libFuzzer and AddressSanitizer on Linux.
+
+First libFuzzer run (2 minutes per target, AddressSanitizer on):
+
+| cbor | types | verify | noise | texts | dht | push | sync | mls |
+|---|---|---|---|---|---|---|---|---|
+| 2.26M | 1.37M | 3.37M | 1.12M | 2.38M | 3.52M | 3.79M | 0.21M | 2.29M |
+
+That's about 20 million inputs, with **no crashes, hangs or memory errors**, swift-mls included. Two minutes per target is short, though: longer runs, and running them regularly, are worth doing before any release. The review found its issues by reading the code against each adversary, not by fuzzing (§12.1).
+
+### 12.3 DHT at scale
+
+`circles-sim` runs real `DHTNode`s on an in-memory network. At **10,000 nodes**, each joining through a random earlier node, routing tables held 124–198 contacts. Each scenario ran 200 lookups.
+
+| Scenario | 1 path | 3 paths |
+|---|---|---|
+| Healthy network | 100% (25.8 requests) | 100% (37.8 requests) |
+| 25% of nodes offline | | 100% (56.1) |
+| 50% of nodes offline | | 100% (82.0) |
+| 10% of nodes attacking | 95.5% | 98.5% |
+| 20% of nodes attacking | 80.5% | 94.5% |
+| 30% of nodes attacking | 63.5% | 91.5% |
+| Targeted eclipse, 20 Sybils next to the victim | 72.5% | 100% |
+| Targeted eclipse, 40 Sybils next to the victim | 55% | 98.5% |
+
+In the attack rows, attackers join normally, then answer every lookup with the attackers closest to its target, withhold records and drop stores. The targeted-eclipse Sybils had node IDs ground to be the victim's nearest neighbors, which took about 3 million key generations for 40 of them. Disjoint paths cost about 50% more requests, and they're what keep lookups working under attack.
+
+### 12.4 Still to address
+
+- Metadata (§8.4): IPs and timing, the pod learning rosters, cover traffic.
+- Cheap Sybils: proof-of-work or stake-weighted node IDs; preferring long-lived contacts already helps.
+- Backdated entries from revoked devices ("first seen" times).
+- Spam on first contact: postage tokens, contact-of-contact allowances, and user-level allowlists.
+- Per-contact storage quotas.
 
 ## 13. Future Work
 
@@ -678,7 +725,7 @@ The protocol will get an independent review before any "1.0" label.
 | M4.5 | Native UIs | SwiftUI app (macOS/iOS) and GNOME app over `CirclesPresentation`; main-actor integration spikes for GTK and WinUI. **GNOME done (2026-10-08):** `Apps/Gnome` (libadwaita via direct C interop), main-actor integration solved, self-testing snapshot mode. **Remaining:** SwiftUI on the Mac Studio; WinUI spike on Windows. |
 | M5 | Communities | MLS-backed groups, moderation tools. **Done on branch `communities` (2026-10-08):** `CirclesMLS` over swift-mls 0.1.7 (pinned; MIT, as is its dependency swift-secret-bytes); public and private communities with open, approval and invite-only joining; posting through the sequencer; owner moderation (remove members, posts, comments); one listener serving every identity on a device; pods carrying communities while the owner is offline; CLI, screen models and GNOME pages. 178 tests pass, and the GNOME self-test covers create, request, approval and an incoming post. Verified by hand with two CLI processes over mDNS. **Not yet:** SwiftUI pages; join requests through pods; moderator roles; a second sequencer. |
 | M6 | Platform breadth | Windows (WinUI), Linux (GTK/libadwaita), and Android apps on the shared presentation layer; push relay, DHT. **DHT and push relay done on branch `platform-breadth` (2026-10-08):** `CirclesDHT` (§7.2) with every listener answering DHT requests, pods and relays (`--dht-port`) as nodes, adding contacts by user ID, and a DHT fallback in `syncAll`; `CirclesPush` and `circles-push` (§7.6) with pods waking their owners' phones. 196 tests pass; both checked live with separate processes. Linux's GNOME app was done in M4.5. **Remaining:** WinUI (needs a Windows machine), Android (needs the Swift Android SDK and NDK), real APNs/FCM delivery with credentials. |
-| M7 | Hardening | Threat-model review, fuzzing (wire format, CBOR), simulation at 10k nodes |
+| M7 | Hardening | Threat-model review, fuzzing (wire format, CBOR), simulation at 10k nodes. **Done on branch `hardening` (2026-10-08):** §12 reviewed against the code; nine fuzz targets (seeded mutation in the suite, libFuzzer on Linux); `circles-sim` at 10,000 nodes; fixes from the review: listener connection limits and idle timeout, S/Kademlia disjoint lookups, DHT store quotas and eviction by distance, envelope wrap limits, join-request expiry. Also fixed: the macOS/Windows build break from `_CryptoExtras`. |
 
 ## 15. Open Questions
 
