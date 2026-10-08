@@ -55,7 +55,13 @@ public struct Envelope: Sendable, Hashable, Codable {
 
     // MARK: Sealing
 
+    /// At most this many wraps of each kind. Opening may trial-decrypt every
+    /// device wrap (one HPKE operation each), so an unbounded count would let
+    /// any author make readers burn CPU. Real audiences are far smaller.
+    public static let maxWraps = 256
+
     public static func seal(_ plaintext: [UInt8], author: UserID, to audience: EnvelopeAudience) throws(CryptoError) -> Envelope {
+        guard audience.devices.count <= maxWraps, audience.audienceKeys.count <= maxWraps else { throw .audienceTooLarge }
         let cek = SymmetricKey(size: .bits256)
         let nonce = ChaChaPoly.Nonce()
         let nonceBytes = Array(nonce)
@@ -102,7 +108,7 @@ public struct Envelope: Sendable, Hashable, Codable {
         return try seal(try cborEncode(signed), author: author, to: audience)
     }
 
-    private init(
+    init(
         version: UInt64, author: UserID, nonceBytes: [UInt8], ciphertext: [UInt8],
         audienceWraps: [AudienceWrap], deviceWraps: [DeviceWrap]
     ) {
@@ -175,6 +181,7 @@ public struct Envelope: Sendable, Hashable, Codable {
 
     private func checkVersion() throws(CryptoError) {
         guard version == Self.currentVersion else { throw .unsupportedVersion(version) }
+        guard deviceWraps.count <= Self.maxWraps, audienceWraps.count <= Self.maxWraps else { throw .audienceTooLarge }
     }
 
     private static func bodyAAD(version: UInt64, author: UserID) -> [UInt8] {
