@@ -306,7 +306,7 @@ extension Account {
         var pending: Bool
     }
 
-    private func open(_ body: LogBody) -> (ContentItem, StreamItem.Audience)? {
+    func open(_ body: LogBody) -> (ContentItem, StreamItem.Audience)? {
         switch body {
         case .publicContent(let item):
             return (item, .everyone)
@@ -321,14 +321,14 @@ extension Account {
         }
     }
 
-    private func verifiedPost(_ item: ContentItem, author: UserID, identity: VerifiedIdentity) -> Post? {
+    func verifiedPost(_ item: ContentItem, author: UserID, identity: VerifiedIdentity) -> Post? {
         guard let claimed = try? CBORDecoder().decode(Post.self, from: item.object.payload), claimed.author == author,
               let payload = try? identity.verify(item.object, label: .post, atMillis: claimed.created.millis)
         else { return nil }
         return try? CBORDecoder().decode(Post.self, from: payload)
     }
 
-    private func streamItem(_ post: Post, id: ContentID, author: UserID, audience: StreamItem.Audience, item: ContentItem) -> StreamItem {
+    func streamItem(_ post: Post, id: ContentID, author: UserID, audience: StreamItem.Audience, item: ContentItem) -> StreamItem {
         StreamItem(
             id: id, author: author, authorName: name(of: author), created: post.created, body: post.body,
             audience: audience, attachments: post.attachments,
@@ -360,7 +360,7 @@ extension Account {
         return verifiedContribution(thread.contribution, contributorIdentity: thread.contributorIdentity, pending: false)
     }
 
-    private func verifiedContribution(_ item: ContentItem, contributorIdentity document: SignedObject, pending: Bool) -> VerifiedContribution? {
+    func verifiedContribution(_ item: ContentItem, contributorIdentity document: SignedObject, pending: Bool) -> VerifiedContribution? {
         guard let target = Self.target(of: item) else { return nil }
         switch item.kind {
         case .comment:
@@ -384,7 +384,7 @@ extension Account {
         }
     }
 
-    private func apply(_ thread: [VerifiedContribution], to item: inout StreamItem) {
+    func apply(_ thread: [VerifiedContribution], to item: inout StreamItem) {
         item.comments = thread.compactMap { contribution in
             contribution.comment.map {
                 StreamComment(id: contribution.id, author: contribution.author, authorName: contribution.authorName,

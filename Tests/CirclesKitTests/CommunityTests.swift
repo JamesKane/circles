@@ -1,0 +1,159 @@
+import Testing
+import Foundation
+import CirclesCore
+import CirclesNet
+import CirclesCrypto
+import CirclesSync
+@testable import CirclesKit
+
+/// Serves `community` from its owner over real TCP.
+func servingCommunity<R>(_ owner: Account, _ community: UserID, _ body: (Int) async throws -> R) async throws -> R {
+    let listener = try await NoiseListener(host: "127.0.0.1", port: 0, handshake: await owner.makeHandshake(role: .responder))
+    let engine = try await owner.communityEngine(community)
+    let task = Task { try await listener.run { session in _ = try await engine.run(over: session) } }
+    defer { task.cancel() }
+    return try await body(listener.port)
+}
+
+/// One round: the member syncs with the community (twice, so a request
+/// admitted mid-session is followed by its result), then both sides process.
+func round(_ owner: Account, _ community: UserID, _ members: Account...) async throws {
+    try await servingCommunity(owner, community) { port in
+        for member in members {
+            _ = try await member.sync(host: "127.0.0.1", port: port)
+            _ = try await member.sync(host: "127.0.0.1", port: port)
+        }
+    }
+    try await owner.processCommunities()
+    for member in members { try await member.processCommunities() }
+}
+
+func feed(_ account: Account, _ community: UserID) async throws -> [String] {
+    try await account.communityFeed(community).map(\.body.plainText)
+}
+
+@Suite("Communities end to end")
+struct CommunityTests {
+    @Test("open community: join, post through the sequencer, comment and +1; private ones read from join onward",
+          arguments: [CommunityVisibility.private, .public])
+    func openCommunity(visibility: CommunityVisibility) async throws {
+        let alice = try await Account.create(home: temporaryHome(), displayName: "Alice")
+        let bob = try await Account.create(home: temporaryHome(), displayName: "Bob")
+        let carol = try await Account.create(home: temporaryHome(), displayName: "Carol")
+        let community = try await alice.createCommunity(name: "Hikers", visibility: visibility, joinPolicy: .open)
+        try await alice.post(RichText(plain: "before anyone"), toCommunity: community)
+
+        let invite = try await alice.communityInvite(community)
+        try await bob.joinCommunity(invite: invite)
+        #expect(try await bob.communities().first?.role == .pending)
+        try await round(alice, community, bob)
+        #expect(try await bob.communities().first?.role == .member)
+        #expect(Set(try await bob.communityMembers(community).map(\.user)) == [alice.user, bob.user])
+        // Private: history from join onward. Public: the whole log is readable.
+        #expect(try await feed(bob, community) == (visibility == .private ? [] : ["before anyone"]))
+
+        let postID = try await bob.post(RichText(plain: "Trail report"), toCommunity: community)
+        try await round(alice, community, bob)   // the sequencer collects and republishes
+        try await round(alice, community, bob)   // bob reads the republished post
+        #expect(try await feed(alice, community).first == "Trail report")
+        #expect(try await feed(bob, community).first == "Trail report")
+        #expect(try await bob.communityFeed(community).first?.authorName == "Bob")
+
+        try await carol.joinCommunity(invite: invite)
+        try await round(alice, community, carol)
+        let ref = ObjectRef(author: bob.user, id: postID)
+        try await carol.comment(RichText(plain: "Nice!"), on: ref, inCommunity: community)
+        try await carol.setPlusOne(true, on: ref, inCommunity: community)
+        try await round(alice, community, carol)
+        try await round(alice, community, bob, carol)
+        let seen = try #require(try await bob.communityFeed(community).first { $0.id == postID })
+        #expect(seen.comments.map(\.body.plainText) == ["Nice!"])
+        #expect(seen.plusOnes == 1)
+    }
+
+    @Test("approval: requests wait for the owner; removal locks a member out of a private community")
+    func approvalAndRemoval() async throws {
+        let alice = try await Account.create(home: temporaryHome(), displayName: "Alice")
+        let bob = try await Account.create(home: temporaryHome(), displayName: "Bob")
+        let carol = try await Account.create(home: temporaryHome(), displayName: "Carol")
+        let community = try await alice.createCommunity(name: "Book club", visibility: .private, joinPolicy: .approval)
+        let invite = try await alice.communityInvite(community)
+        try await bob.joinCommunity(invite: invite)
+        try await carol.joinCommunity(invite: invite)
+        try await round(alice, community, bob, carol)
+        #expect(try await bob.communities().first?.role == .pending)
+        let waiting = try #require(try await alice.communities().first).pendingRequests
+        #expect(Set(waiting.map(\.user)) == [bob.user, carol.user])
+        #expect(waiting.contains { $0.name == "Bob" })
+
+        try await alice.approveJoin(bob.user, in: community)
+        try await alice.approveJoin(carol.user, in: community)
+        try await round(alice, community, bob, carol)
+        #expect(try await bob.communities().first?.role == .member)
+        #expect(try await carol.communities().first?.role == .member)
+
+        try await alice.removeFromCommunity([carol.user], in: community)
+        try await alice.post(RichText(plain: "after carol"), toCommunity: community)
+        try await round(alice, community, bob, carol)
+        #expect(try await carol.communities().first?.role == .removed)
+        #expect(try await feed(bob, community) == ["after carol"])
+        #expect(try await feed(carol, community).isEmpty)
+        #expect(Set(try await bob.communityMembers(community).map(\.user)) == [alice.user, bob.user])
+    }
+
+    @Test("invite-only: a request needs a valid token, optionally for one person")
+    func inviteOnly() async throws {
+        let alice = try await Account.create(home: temporaryHome(), displayName: "Alice")
+        let bob = try await Account.create(home: temporaryHome(), displayName: "Bob")
+        let mallory = try await Account.create(home: temporaryHome(), displayName: "Mallory")
+        let community = try await alice.createCommunity(name: "Secret", visibility: .private, joinPolicy: .inviteOnly)
+
+        try await bob.joinCommunity(invite: try await alice.communityInvite(community, for: bob.user))
+        // Mallory reuses Bob's personal invite.
+        try await mallory.joinCommunity(invite: try await alice.communityInvite(community, for: bob.user))
+        try await round(alice, community, bob, mallory)
+        #expect(try await bob.communities().first?.role == .member)
+        #expect(try await mallory.communities().first?.role == .pending)
+
+        let expired = try await alice.communityInvite(community, validFor: .zero)
+        let eve = try await Account.create(home: temporaryHome(), displayName: "Eve")
+        try await eve.joinCommunity(invite: expired)
+        try await round(alice, community, eve)
+        #expect(try await eve.communities().first?.role == .pending)
+    }
+
+    @Test("the owner can remove an item; non-members can't post")
+    func moderation() async throws {
+        let alice = try await Account.create(home: temporaryHome(), displayName: "Alice")
+        let bob = try await Account.create(home: temporaryHome(), displayName: "Bob")
+        let community = try await alice.createCommunity(name: "Open", visibility: .public, joinPolicy: .open)
+        await #expect(throws: CommunityError.unknownCommunity) {
+            try await bob.post(RichText(plain: "hi"), toCommunity: community)
+        }
+        try await bob.joinCommunity(invite: try await alice.communityInvite(community))
+        try await round(alice, community, bob)
+        let spam = try await bob.post(RichText(plain: "spam"), toCommunity: community)
+        try await round(alice, community, bob)
+        try await round(alice, community, bob)
+        #expect(try await feed(bob, community) == ["spam"])
+        try await alice.removeCommunityItem(spam, from: community)
+        try await round(alice, community, bob)
+        #expect(try await feed(bob, community).isEmpty)
+        #expect(try await feed(alice, community).isEmpty)
+    }
+
+    @Test("community state survives reopening the account")
+    func persistence() async throws {
+        let home = temporaryHome()
+        let alice = try await Account.create(home: home, displayName: "Alice")
+        let bob = try await Account.create(home: temporaryHome(), displayName: "Bob")
+        let community = try await alice.createCommunity(name: "Durable", visibility: .private, joinPolicy: .open)
+        try await bob.joinCommunity(invite: try await alice.communityInvite(community))
+        try await round(alice, community, bob)
+
+        let reopened = try await Account.open(home: home)
+        try await reopened.post(RichText(plain: "after restart"), toCommunity: community)
+        try await round(reopened, community, bob)
+        #expect(try await feed(bob, community) == ["after restart"])
+    }
+}

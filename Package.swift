@@ -87,7 +87,7 @@ let package = Package(
         ),
         .target(
             name: "CirclesKit",
-            dependencies: ["CirclesCore", "CirclesCrypto", "CirclesSync", "CirclesNet", "CirclesStorage"],
+            dependencies: ["CirclesCore", "CirclesCrypto", "CirclesSync", "CirclesNet", "CirclesStorage", "CirclesMLS"],
             swiftSettings: swiftSettings
         ),
         .target(

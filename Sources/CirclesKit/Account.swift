@@ -236,10 +236,13 @@ public actor Account {
 
     // MARK: Logging
 
-    func appendToLog(_ body: LogBody, created: HLCTimestamp? = nil, blobs: [ContentID]? = nil) async throws {
+    /// Appends to this device's log for `author`: ourselves, or a community
+    /// this device sequences (docs/DESIGN.md §8.3).
+    func appendToLog(_ body: LogBody, as author: UserID? = nil, created: HLCTimestamp? = nil, blobs: [ContentID]? = nil) async throws {
+        let author = author ?? user
         let created = try created ?? tick()
-        let head = try await store.head(author: user, device: deviceID)
-        let entry = LogEntry(author: user, device: deviceID, sequence: (head?.sequence ?? 0) + 1,
+        let head = try await store.head(author: author, device: deviceID)
+        let entry = LogEntry(author: author, device: deviceID, sequence: (head?.sequence ?? 0) + 1,
                              previous: head?.id, created: created, body: body, blobs: blobs)
         try await store.append(try VerifiedLogEntry(signing: entry, with: device))
     }
@@ -293,16 +296,28 @@ public actor Account {
     public func syncEngine() -> SyncEngine {
         let me = user
         let contactsURL = files.contacts
+        let communitiesURL = files.communities
         let currentContacts: @Sendable () -> [UserID] = {
             ((try? Files.loadStatic([Contact].self, from: contactsURL)) ?? []).map(\.user)
+        }
+        // Communities we belong to (or asked to join) are synced like contacts:
+        // we talk to their serving devices and want their logs.
+        let currentCommunities: @Sendable () -> [UserID] = {
+            ((try? Files.loadStatic([CommunityState].self, from: communitiesURL)) ?? [])
+                .filter { $0.role == .member || $0.role == .pending }.map(\.community)
         }
         return SyncEngine(
             store: store,
             identityDocument: identityDocument,
             policy: SyncPolicy(
-                isAllowed: { peer in peer.user == me || currentContacts().contains(peer.user) },
-                interests: { currentContacts() + [me] },
+                isAllowed: { peer in
+                    peer.user == me || currentContacts().contains(peer.user) || currentCommunities().contains(peer.user)
+                },
+                interests: { currentContacts() + currentCommunities() + [me] },
                 outgoingControl: { peer in
+                    if currentCommunities().contains(peer.user) {
+                        return (try? await self.joinRequest(for: peer.user)).map { [$0] } ?? []
+                    }
                     guard peer.user == me, peer.device?.capabilities.contains(.storeAndForward) == true,
                           let config = try? await self.signedPodConfig()
                     else { return [] }
@@ -524,6 +539,14 @@ struct Files {
     var keyring: URL { account.appendingPathComponent("keyring.cbor") }
     var clock: URL { account.appendingPathComponent("clock.cbor") }
     var preferences: URL { account.appendingPathComponent("preferences.cbor") }
+    /// Communities we own or belong to (0600: holds community keys and MLS
+    /// join secrets).
+    var communities: URL { account.appendingPathComponent("communities.cbor") }
+    /// A random key that seals local secret state such as MLS groups (0600).
+    var storageKey: URL { account.appendingPathComponent("storage.key") }
+    func mlsState(_ community: UserID) -> URL {
+        account.appendingPathComponent("mls").appendingPathComponent(Base32.encode(community.multicodecBytes) + ".sealed")
+    }
     /// IDs of contributions already republished into our threads.
     var threads: URL { account.appendingPathComponent("threads.cbor") }
 
