@@ -93,7 +93,7 @@ let package = Package(
         ),
         .target(
             name: "CirclesKit",
-            dependencies: ["CirclesCore", "CirclesCrypto", "CirclesSync", "CirclesNet", "CirclesStorage", "CirclesMLS"],
+            dependencies: ["CirclesCore", "CirclesCrypto", "CirclesSync", "CirclesNet", "CirclesStorage", "CirclesMLS", "CirclesDHT"],
             swiftSettings: swiftSettings
         ),
         .target(
@@ -108,17 +108,17 @@ let package = Package(
         ),
         .executableTarget(
             name: "circles-cli",
-            dependencies: ["CirclesKit", "CirclesPresentation", "CirclesCLISupport", .product(name: "ArgumentParser", package: "swift-argument-parser")],
+            dependencies: ["CirclesKit", "CirclesDHT", "CirclesPresentation", "CirclesCLISupport", .product(name: "ArgumentParser", package: "swift-argument-parser")],
             swiftSettings: swiftSettings
         ),
         .executableTarget(
             name: "circles-pod",
-            dependencies: ["CirclesKit", "CirclesCLISupport", .product(name: "ArgumentParser", package: "swift-argument-parser")],
+            dependencies: ["CirclesKit", "CirclesDHT", "CirclesCLISupport", .product(name: "ArgumentParser", package: "swift-argument-parser")],
             swiftSettings: swiftSettings
         ),
         .executableTarget(
             name: "circles-relay",
-            dependencies: ["CirclesKit", "CirclesCLISupport", .product(name: "ArgumentParser", package: "swift-argument-parser")],
+            dependencies: ["CirclesKit", "CirclesDHT", "CirclesCLISupport", .product(name: "ArgumentParser", package: "swift-argument-parser")],
             swiftSettings: swiftSettings
         ),
         .testTarget(
@@ -163,7 +163,7 @@ let package = Package(
         ),
         .testTarget(
             name: "CirclesKitTests",
-            dependencies: ["CirclesKit"],
+            dependencies: ["CirclesKit", "CirclesDHT"],
             swiftSettings: swiftSettings
         ),
     ]

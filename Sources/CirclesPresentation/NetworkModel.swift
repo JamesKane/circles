@@ -24,6 +24,8 @@ public struct NetworkState: Sendable, Equatable {
     /// Goes up whenever a sync brought new content. UIs refresh their
     /// Stream when it changes.
     public var newContentCount = 0
+    /// DHT nodes known at the last refresh; nil before one.
+    public var dhtNodes: Int?
 
     /// One line for a status bar, e.g. "Online · port 41234 · 1 relay".
     public func summary(now: Date = Date()) -> String {
@@ -36,6 +38,7 @@ public struct NetworkState: Sendable, Equatable {
             let reachable = relays.values.filter { $0 }.count
             if reachable > 0 { parts.append("\(reachable) relay\(reachable == 1 ? "" : "s")") }
             if let portMapping { parts.append("public \(portMapping)") }
+            if let dhtNodes, dhtNodes > 0 { parts.append("DHT \(dhtNodes)") }
             if syncing {
                 parts.append("syncing…")
             } else if let lastSync {
@@ -152,6 +155,9 @@ public final class NetworkModel: ScreenModel {
             log("Couldn't reach \(route): \(reason)")
         case .syncRoundFinished:
             state.syncing = false
+        case .dhtRefreshed(let nodes, let stored):
+            state.dhtNodes = nodes
+            log("DHT: \(nodes) nodes known, identity stored on \(stored)")
         }
     }
 

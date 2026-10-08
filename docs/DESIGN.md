@@ -150,6 +150,14 @@ Re-check `swift-nio-quic` at each milestone boundary.
    - Verified against Avahi, which fully resolves our advertisement. IPv4 only for now.
 2. **Known peers:** addresses from identity documents, cached per contact.
 3. **DHT:** Kademlia over the same transport, keyed by user ID. It stores signed identity documents and "where to find me" records, never content. Records are signed and have a TTL.
+   - *As built (M6, `CirclesDHT`):* the only record type is the signed identity document, whose endpoints already say where to find someone. Records verify themselves, a higher version replaces a lower, and they expire after 24 hours unless republished (every 30 minutes by `circles serve`, pods and the GNOME app's node).
+   - Node IDs are hashes of Noise static keys, so a contact's ID is proven by the handshake that reaches it. Nodes record contacts at the address they connected from, never one they claim, and only nodes that say they listen are added to routing tables. Buckets of k=20 keep long-lived contacts over newcomers; lookups ask alpha=3 at a time.
+   - Value lookups collect records from every responder and keep the newest version, so a stale or lying node can't hide an update.
+   - DHT requests share each device's sync port: the first frame's tag (64 and up) tells them apart.
+   - Who listens: pods (at their configured address) and relays run with `--dht-port`, which act as bootstrap nodes. A user's device offers itself only while router port mapping is active, using the mapped port; otherwise it only asks, so unreachable devices don't fill routing tables.
+   - Devices join through configured bootstrap nodes, nodes remembered from last time, their own pods and their contacts' pods. Pods keep their owner's identity document (and the owner's communities') published while the owner is away.
+   - Uses: adding a contact by user ID alone (`circles contact add circles:…`), and in `syncAll`, when every known route to a contact or community fails, looking up a newer document and trying its addresses once.
+   - Not yet: S/Kademlia disjoint lookups and per-peer rate limits (M7); records are kept in memory only, so a restarted node relies on owners republishing.
 4. **Pods and relays:** listed in the identity document as stable rendezvous points.
 
 ### 7.3 NAT traversal

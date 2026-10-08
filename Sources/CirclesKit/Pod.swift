@@ -4,6 +4,7 @@ public import CirclesCrypto
 public import CirclesSync
 import CirclesNet
 public import CirclesStorage
+public import CirclesDHT
 
 /// Which contacts a pod serves and keeps logs for. Signed by one of the
 /// owner's author devices and sent to the pod as a sync control message
@@ -110,6 +111,8 @@ public actor PodNode {
     public private(set) var port: UInt16
     public private(set) var owner: UserID?
     public private(set) var config: PodConfig?
+    /// The pod's DHT node: always on and reachable, so a good one.
+    public nonisolated let dht: DHTNode
 
     private let device: DeviceKeyPair
 
@@ -125,9 +128,10 @@ public actor PodNode {
         var agreement: [UInt8]
     }
 
-    private static func files(_ home: URL) -> (device: URL, state: URL) {
+    private static func files(_ home: URL) -> (device: URL, state: URL, dhtNodes: URL) {
         let pod = home.appendingPathComponent("pod")
-        return (pod.appendingPathComponent("device.cbor"), pod.appendingPathComponent("state.cbor"))
+        return (pod.appendingPathComponent("device.cbor"), pod.appendingPathComponent("state.cbor"),
+                pod.appendingPathComponent("dht-nodes.cbor"))
     }
 
     /// Creates a pod reachable at `host:port`, returning it and its pairing code.
@@ -163,15 +167,21 @@ public actor PodNode {
         port = state.port
         owner = state.owner
         config = state.config
+        let reference = WeakPod()
+        dht = DHTNode(key: device.agreementPublicKey, listenPort: state.port,
+                      transport: NoiseDHTTransport { await reference.pod?.makeHandshake(role: .initiator) },
+                      now: { wallClockMillis() })
         self.device = device
+        reference.pod = self
     }
 
     /// Updates the address the pod reports in its pairing code, e.g. once the
     /// real port is known.
-    public func setAddress(host: String, port: UInt16) throws {
+    public func setAddress(host: String, port: UInt16) async throws {
         self.host = host
         self.port = port
         try saveState()
+        await dht.setListenPort(port)
     }
 
     public var pairingCode: PodPairingCode {
@@ -245,13 +255,36 @@ public actor PodNode {
         )
     }
 
-    /// Answers an incoming session as the owner or as one of its
-    /// communities, whichever the peer asked for.
-    public func respond(over channel: some MessageChannel) async throws -> SyncReport {
-        try await SyncEngine.respond(over: channel) { target in
+    /// Answers an incoming session: a DHT request, or sync as the owner or as
+    /// one of its communities, whichever the peer asked for.
+    @discardableResult
+    public func respond(over channel: some MessageChannel) async throws -> SyncReport? {
+        guard let first = try await channel.receive() else { return nil }
+        if DHTMessage.isDHT(first) {
+            try await answerDHT(first, over: channel, node: dht)
+            return nil
+        }
+        return try await SyncEngine.respond(over: channel, first: first) { target in
             guard let target, target != (await self.owner) else { return try await self.syncEngine() }
             return try await self.communityEngine(target)
         }
+    }
+
+    /// Rejoins the DHT through `seeds` and the nodes it knew last time, and
+    /// keeps the owner's identity document (and its communities') published,
+    /// so others can find the owner while the owner's devices are away.
+    @discardableResult
+    public func maintainDHT(seeds: [DHTContact] = []) async -> (nodes: Int, stored: Int) {
+        let files = Self.files(home)
+        let remembered = (try? FileIO.read(files.dhtNodes)).flatMap { $0 }.flatMap { try? CBORDecoder().decode([DHTContact].self, from: $0) } ?? []
+        let known = await dht.bootstrap(seeds + remembered)
+        var stored = 0
+        var documents: [SignedObject] = []
+        if let owner, let document = try? await store.identityDocument(for: owner) { documents.append(document) }
+        for community in config?.communities ?? [] { documents.append(community.identityDocument) }
+        for document in documents { stored += await dht.publish(document) }
+        if let bytes = try? CBOREncoder().encode(await dht.contacts) { try? FileIO.write(bytes, to: files.dhtNodes) }
+        return (known, stored)
     }
 
     private func accept(_ control: SignedObject, from peer: PeerInfo) async throws {
@@ -278,6 +311,10 @@ public actor PodNode {
         self.config = config
         try saveState()
     }
+}
+
+final class WeakPod: @unchecked Sendable {
+    weak var pod: PodNode?
 }
 
 public enum PodError: Error, Sendable, Equatable {

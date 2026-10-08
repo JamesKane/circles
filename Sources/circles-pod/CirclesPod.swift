@@ -6,6 +6,7 @@ import CirclesCrypto
 import CirclesStorage
 import CirclesNet
 import CirclesKit
+import CirclesDHT
 import CirclesCLISupport
 
 @main
@@ -60,20 +61,31 @@ struct Serve: AsyncParsableCommand {
     static let configuration = CommandConfiguration(abstract: "Serve the owner and their contacts.")
     @OptionGroup var global: PodGlobal
     @Flag(help: "Ask the router to forward the port (PCP, NAT-PMP or UPnP-IGD).") var mapPort = false
+    @Option(name: .customLong("dht-bootstrap"), help: "A DHT node to join through (circles-dht-node:…), repeatable.")
+    var dhtBootstrap: [String] = []
 
     func run() async throws {
         let pod = try await global.open()
         guard let owner = await pod.owner else { throw ValidationError("Not paired yet. Run `circles-pod pair`.") }
-        let mapPort = self.mapPort
+        let mapPort = self.mapPort, dhtBootstrap = self.dhtBootstrap
         try await runUntilInterrupted {
             let listener = try await NoiseListener(port: Int(await pod.port), handshake: await pod.makeHandshake(role: .responder))
             say("Pod for \(owner) listening on port \(listener.port). Ctrl-C to stop.")
             try await withThrowingTaskGroup(of: Void.self) { group in
                 group.addTask {
                     try await listener.run { session in
-                        let report = try await pod.respond(over: session)
+                        guard let report = try await pod.respond(over: session) else { return } // a DHT request
                         let peer = report.peer.map { $0 == owner ? "owner" : "contact \(String("\($0)".prefix(20)))…" } ?? "?"
                         say(describe(report, peerName: peer, direction: "incoming"))
+                    }
+                }
+                let seeds = try dhtBootstrap.map { try DHTNodeText.contact(from: $0) }
+                group.addTask {
+                    say("DHT node: \(try DHTNodeText.text(for: DHTContact(key: pod.agreementKey, host: await pod.host, port: await pod.port)))")
+                    while true {
+                        let (nodes, stored) = await pod.maintainDHT(seeds: seeds)
+                        say("DHT: \(nodes) node\(nodes == 1 ? "" : "s") known; owner's identity stored on \(stored).")
+                        try await Task.sleep(for: .seconds(NodeService.dhtRefreshSeconds))
                     }
                 }
                 if mapPort {
