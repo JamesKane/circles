@@ -5,6 +5,7 @@ public import CirclesSync
 import CirclesNet
 public import CirclesStorage
 public import CirclesDHT
+public import CirclesPush
 
 /// Which contacts a pod serves and keeps logs for. Signed by one of the
 /// owner's author devices and sent to the pod as a sync control message
@@ -16,12 +17,18 @@ public struct PodConfig: Sendable, Codable, Equatable {
     /// Communities the owner sequences, which the pod serves to their
     /// members (docs/DESIGN.md §8.3). Absent when none (added in M5).
     public var communities: [PodCommunity]?
+    /// Push relays and handles of the device that signed this config, to
+    /// wake it when something arrives (docs/DESIGN.md §7.6). Each of the
+    /// owner's devices sends its own; the pod keeps them per device.
+    /// Absent when none (added in M6).
+    public var push: [PushTarget]?
 
-    public init(owner: UserID, version: UInt64, contacts: [UserID], communities: [PodCommunity] = []) {
+    public init(owner: UserID, version: UInt64, contacts: [UserID], communities: [PodCommunity] = [], push: [PushTarget] = []) {
         self.owner = owner
         self.version = version
         self.contacts = contacts
         self.communities = communities.isEmpty ? nil : communities
+        self.push = push.isEmpty ? nil : push
     }
 }
 
@@ -111,6 +118,8 @@ public actor PodNode {
     public private(set) var port: UInt16
     public private(set) var owner: UserID?
     public private(set) var config: PodConfig?
+    private var push: [DeviceID: [PushTarget]] = [:]
+    private var lastPing: ContinuousClock.Instant?
     /// The pod's DHT node: always on and reachable, so a good one.
     public nonisolated let dht: DHTNode
 
@@ -121,6 +130,13 @@ public actor PodNode {
         var port: UInt16
         var owner: UserID?
         var config: PodConfig?
+        /// Push targets per owner device (added in M6).
+        var push: [DevicePush]?
+    }
+
+    struct DevicePush: Codable, Sendable {
+        var device: DeviceID
+        var targets: [PushTarget]
     }
 
     private struct StoredDevice: Codable {
@@ -167,6 +183,7 @@ public actor PodNode {
         port = state.port
         owner = state.owner
         config = state.config
+        push = Dictionary((state.push ?? []).map { ($0.device, $0.targets) }, uniquingKeysWith: { $1 })
         let reference = WeakPod()
         dht = DHTNode(key: device.agreementPublicKey, listenPort: state.port,
                       transport: NoiseDHTTransport { await reference.pod?.makeHandshake(role: .initiator) },
@@ -189,7 +206,9 @@ public actor PodNode {
     }
 
     private func saveState() throws {
-        try FileIO.write(try CBOREncoder().encode(State(host: host, port: port, owner: owner, config: config)),
+        let devicePush = push.map { DevicePush(device: $0.key, targets: $0.value) }.sorted { $0.device.description < $1.device.description }
+        try FileIO.write(try CBOREncoder().encode(State(host: host, port: port, owner: owner, config: config,
+                                                        push: devicePush.isEmpty ? nil : devicePush)),
                          to: Self.files(home).state)
     }
 
@@ -264,10 +283,16 @@ public actor PodNode {
             try await answerDHT(first, over: channel, node: dht)
             return nil
         }
-        return try await SyncEngine.respond(over: channel, first: first) { target in
+        let report = try await SyncEngine.respond(over: channel, first: first) { target in
             guard let target, target != (await self.owner) else { return try await self.syncEngine() }
             return try await self.communityEngine(target)
         }
+        // Something new from someone else: wake the owner's phones, without
+        // holding up this session.
+        if report.received.contains(where: { $0.key != owner && $0.value > 0 }) {
+            Task { await self.wakeOwner() }
+        }
+        return report
     }
 
     /// Rejoins the DHT through `seeds` and the nodes it knew last time, and
@@ -308,8 +333,39 @@ public actor PodNode {
             served.append(community)
         }
         config.communities = served.isEmpty ? nil : served
+        // Push targets belong to the device that signed this config.
+        push[device.device] = config.push ?? []
+        if push[device.device]?.isEmpty == true { push[device.device] = nil }
+        config.push = nil
         self.config = config
         try saveState()
+    }
+
+    /// The push targets the pod would wake, for status displays.
+    public var pushTargets: [PushTarget] { push.values.flatMap { $0 } }
+
+    /// Wakes the owner's devices through their push relays, at most once per
+    /// `minimumInterval`. Content-free: the relay learns only that it happened.
+    /// Returns how many relays accepted.
+    @discardableResult
+    public func wakeOwner(minimumInterval: Duration = .seconds(30)) async -> Int {
+        let now = ContinuousClock.now
+        if let lastPing, now - lastPing < minimumInterval { return 0 }
+        let targets = push.values.flatMap { $0 }
+        guard !targets.isEmpty else { return 0 }
+        lastPing = now
+        var byRelay: [String: (target: PushTarget, handles: [PushHandle])] = [:]
+        for target in targets {
+            let relay = "\(target.host):\(target.port)#\(target.key.rawRepresentation)"
+            byRelay[relay, default: (target, [])].handles.append(target.handle)
+        }
+        var accepted = 0
+        for (target, handles) in byRelay.values {
+            let reply = try? await PushClient.request(.ping(handles), host: target.host, port: Int(target.port), key: target.key,
+                                                      handshake: makeHandshake(role: .initiator))
+            if reply == .ok { accepted += 1 }
+        }
+        return accepted
     }
 }
 

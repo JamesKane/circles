@@ -355,7 +355,7 @@ public actor Account {
     private func signedPodConfig() async throws -> SignedObject {
         try reload()
         let config = PodConfig(owner: user, version: wallClockMillis(), contacts: contacts.map(\.user),
-                               communities: try await podCommunities())
+                               communities: try await podCommunities(), push: pushTargets())
         return try SignedObject(encoding: config, label: .podConfig, with: device)
     }
 
@@ -603,6 +603,8 @@ struct Files {
     var keyring: URL { account.appendingPathComponent("keyring.cbor") }
     var clock: URL { account.appendingPathComponent("clock.cbor") }
     var preferences: URL { account.appendingPathComponent("preferences.cbor") }
+    /// This device's push relay registrations (docs/DESIGN.md §7.6).
+    var push: URL { account.appendingPathComponent("push.cbor") }
     /// DHT nodes known at the last refresh, to rejoin through.
     var dhtContacts: URL { account.appendingPathComponent("dht-nodes.cbor") }
     /// Communities we own or belong to (0600: holds community keys and MLS

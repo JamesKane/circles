@@ -25,6 +25,7 @@ let package = Package(
         .executable(name: "circles", targets: ["circles-cli"]),
         .executable(name: "circles-pod", targets: ["circles-pod"]),
         .executable(name: "circles-relay", targets: ["circles-relay"]),
+        .executable(name: "circles-push", targets: ["circles-push"]),
     ],
     dependencies: [
         .package(url: "https://github.com/apple/swift-crypto.git", "4.0.0"..<"6.0.0"),
@@ -101,7 +102,7 @@ let package = Package(
         ),
         .target(
             name: "CirclesKit",
-            dependencies: ["CirclesCore", "CirclesCrypto", "CirclesSync", "CirclesNet", "CirclesStorage", "CirclesMLS", "CirclesDHT"],
+            dependencies: ["CirclesCore", "CirclesCrypto", "CirclesSync", "CirclesNet", "CirclesStorage", "CirclesMLS", "CirclesDHT", "CirclesPush"],
             swiftSettings: swiftSettings
         ),
         .target(
@@ -116,7 +117,7 @@ let package = Package(
         ),
         .executableTarget(
             name: "circles-cli",
-            dependencies: ["CirclesKit", "CirclesDHT", "CirclesPresentation", "CirclesCLISupport", .product(name: "ArgumentParser", package: "swift-argument-parser")],
+            dependencies: ["CirclesKit", "CirclesDHT", "CirclesPush", "CirclesPresentation", "CirclesCLISupport", .product(name: "ArgumentParser", package: "swift-argument-parser")],
             swiftSettings: swiftSettings
         ),
         .executableTarget(
@@ -127,6 +128,12 @@ let package = Package(
         .executableTarget(
             name: "circles-relay",
             dependencies: ["CirclesKit", "CirclesDHT", "CirclesCLISupport", .product(name: "ArgumentParser", package: "swift-argument-parser")],
+            swiftSettings: swiftSettings
+        ),
+        .executableTarget(
+            name: "circles-push",
+            dependencies: ["CirclesKit", "CirclesPush", "CirclesNet", "CirclesCLISupport",
+                           .product(name: "ArgumentParser", package: "swift-argument-parser")],
             swiftSettings: swiftSettings
         ),
         .testTarget(
@@ -177,7 +184,7 @@ let package = Package(
         ),
         .testTarget(
             name: "CirclesKitTests",
-            dependencies: ["CirclesKit", "CirclesDHT"],
+            dependencies: ["CirclesKit", "CirclesDHT", "CirclesPush"],
             swiftSettings: swiftSettings
         ),
     ]

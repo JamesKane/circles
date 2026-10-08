@@ -211,6 +211,15 @@ Re-check `swift-nio-quic` at each milestone boundary.
 
 iOS and Android kill background sockets. An optional **push relay** (self-hostable) receives a minimal, content-free "you have something" ping from a pod and forwards it through APNs or FCM. The device then wakes and syncs directly. The push relay only learns that a ping happened, never what it was about.
 
+#### As implemented in M6 (`CirclesPush`, `circles-push`)
+
+- **Registration:** a device registers its platform token over Noise (the relay's key pinned, as with relays) and gets an opaque 16-byte **handle** bound to its device key. Re-registering with a new token keeps the handle; only the registering device can remove it. Registrations persist on the relay (0600).
+- **Handles go to pods only:** each of the owner's devices sends its own handles in the signed pod configuration (`PodConfig.push`), and the pod keeps them per signing device, so one device's sync never drops another's registration.
+- **Pings:** after a sync brings entries from anyone other than the owner (contacts, community members), the pod pings its owner's handles, grouped per relay, at most every 30 seconds. The relay coalesces per handle too, caps handles per ping, and answers pings the same way whether or not a handle exists, so they can't probe for registrations.
+- **Delivery:** content-free. APNs background pushes (`apns-push-type: background`, priority 5) with token auth (an ES256 JWT, reused for 50 minutes); FCM HTTP v1 high-priority data messages (`{"circles": "sync"}`) with an OAuth token from an RS256 service-account assertion. A `test` platform prints wake-ups instead, for running without credentials.
+- **What the relay learns:** device push tokens (unavoidable), which pod IPs ping which handles, and when. Not who the pods belong to (handles are random), and nothing about content.
+- **Not yet verified:** real delivery to Apple and Google. The requests are checked byte for byte in tests (JWTs verified under the matching keys), but no credentials were available. The mobile apps that register don't exist yet; `circles push register` stands in.
+
 ## 8. Audience and Encryption Model
 
 This is the heart of the design.
@@ -667,7 +676,7 @@ The protocol will get an independent review before any "1.0" label.
 | M4 | The Stream | Comments, +1s, reshares, media blobs; `CirclesPresentation` ~~+ SwiftUI app on macOS/iOS; main-actor spikes for WinUI and GTK~~ (native UIs deferred). **Done (2026-10-08):** SQLite store with migration; encrypted chunked media synced eagerly; comments/+1s through author republishing; reshares of public posts; presentation layer with headless tests; CLI commands. 138 tests pass. Verified live by migrating the M3 demo data and running photo, comment, +1, approval and reshare through a pod. |
 | M4.5 | Native UIs | SwiftUI app (macOS/iOS) and GNOME app over `CirclesPresentation`; main-actor integration spikes for GTK and WinUI. **GNOME done (2026-10-08):** `Apps/Gnome` (libadwaita via direct C interop), main-actor integration solved, self-testing snapshot mode. **Remaining:** SwiftUI on the Mac Studio; WinUI spike on Windows. |
 | M5 | Communities | MLS-backed groups, moderation tools. **Done on branch `communities` (2026-10-08):** `CirclesMLS` over swift-mls 0.1.7 (pinned; MIT, as is its dependency swift-secret-bytes); public and private communities with open, approval and invite-only joining; posting through the sequencer; owner moderation (remove members, posts, comments); one listener serving every identity on a device; pods carrying communities while the owner is offline; CLI, screen models and GNOME pages. 178 tests pass, and the GNOME self-test covers create, request, approval and an incoming post. Verified by hand with two CLI processes over mDNS. **Not yet:** SwiftUI pages; join requests through pods; moderator roles; a second sequencer. |
-| M6 | Platform breadth | Windows (WinUI), Linux (GTK/libadwaita), and Android apps on the shared presentation layer; push relay, DHT |
+| M6 | Platform breadth | Windows (WinUI), Linux (GTK/libadwaita), and Android apps on the shared presentation layer; push relay, DHT. **DHT and push relay done on branch `platform-breadth` (2026-10-08):** `CirclesDHT` (§7.2) with every listener answering DHT requests, pods and relays (`--dht-port`) as nodes, adding contacts by user ID, and a DHT fallback in `syncAll`; `CirclesPush` and `circles-push` (§7.6) with pods waking their owners' phones. 196 tests pass; both checked live with separate processes. Linux's GNOME app was done in M4.5. **Remaining:** WinUI (needs a Windows machine), Android (needs the Swift Android SDK and NDK), real APNs/FCM delivery with credentials. |
 | M7 | Hardening | Threat-model review, fuzzing (wire format, CBOR), simulation at 10k nodes |
 
 ## 15. Open Questions
