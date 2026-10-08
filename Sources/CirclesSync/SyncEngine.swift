@@ -70,6 +70,11 @@ public struct SyncEngine: Sendable {
     public var batchSize = 128
     /// The most media chunks to ask for in one session.
     public var maxBlobsPerSession = 1024
+    /// At most this many entries kept per author, across their devices, so
+    /// a contact can't fill our disk with their own log (docs/DESIGN.md §12).
+    public var maxEntriesPerAuthor = 250_000
+    /// At most this many media chunks listed by one entry (1 GiB at 256 KiB).
+    public var maxBlobsPerEntry = 4096
 
     public init(store: any LogStore, identityDocument: SignedObject, policy: SyncPolicy, now: @escaping @Sendable () -> UInt64) {
         self.store = store
@@ -339,13 +344,24 @@ public struct SyncEngine: Sendable {
     private func ingest(_ entries: [SignedObject], author: VerifiedIdentity, report: inout SyncReport) async throws -> Int {
         var accepted = 0
         var failedDevices: Set<DeviceID> = []
+        var stored = try await store.frontier(author: author.user).sequences.values.reduce(0) { $0 + Int(min($1, UInt64(Int.max / 2))) }
         for signed in entries {
             guard let device = signed.signerDevice, !failedDevices.contains(device) else { continue }
+            guard stored < maxEntriesPerAuthor else {
+                report.rejected.append("entries for \(author.user): over the quota of \(maxEntriesPerAuthor)")
+                break
+            }
             let head = try await store.head(author: author.user, device: device)
             do {
                 let verified = try VerifiedLogEntry(verifying: signed, author: author, after: head)
+                guard (verified.entry.blobs?.count ?? 0) <= maxBlobsPerEntry else {
+                    report.rejected.append("entry for \(author.user) lists too many media chunks")
+                    failedDevices.insert(device) // the log can't continue past it
+                    continue
+                }
                 try await store.append(verified)
                 accepted += 1
+                stored += 1
             } catch SyncError.outOfSequence(_, let expected, let got) where got < expected {
                 continue // already have it
             } catch {

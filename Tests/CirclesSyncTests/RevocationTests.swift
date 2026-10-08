@@ -64,3 +64,20 @@ struct RevocationTests {
         #expect(try await store.allEntries(author: user.identity.userID).map(\.contentID) == [first.id])
     }
 }
+
+@Suite("Storage quotas")
+struct QuotaTests {
+    @Test("a contact's log is kept only up to the per-author quota")
+    func entriesPerAuthor() async throws {
+        let alice = try Node(), bob = try Node()
+        try await alice.bootstrap(); try await bob.bootstrap()
+        try await alice.meet(bob); try await bob.meet(alice)
+        for index in 0..<5 { try await alice.post("post \(index)") }
+        var bobsEngine = bob.engine()
+        bobsEngine.maxEntriesPerAuthor = 3
+        let (_, bobsReport) = try await sync(alice, bob, engines: (alice.engine(), bobsEngine))
+        #expect(bobsReport.received[alice.user] == 3)
+        #expect(bobsReport.rejected.contains { $0.contains("over the quota of 3") })
+        #expect(try await bob.postTexts(by: alice.user) == ["post 0", "post 1", "post 2"])
+    }
+}
