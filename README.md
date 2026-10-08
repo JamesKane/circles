@@ -101,7 +101,7 @@ To build a signed, notarized disk image to hand out (needs a Developer ID Applic
 NOTARY_PROFILE=circles-notary Apps/Apple/package.sh   # → Apps/Apple/build/Circles-<version>.dmg
 ```
 
-The app is sandboxed and keeps its data in its container's Application Support folder. So far it has onboarding, the Stream, posts with comments, +1s and resharing, and the composer; People, Circles and Settings come next.
+The app is sandboxed and keeps its data in its container's Application Support folder. [docs/USER_MANUAL.md](docs/USER_MANUAL.md) is a draft user manual with screenshots.
 
 ## Layout
 
