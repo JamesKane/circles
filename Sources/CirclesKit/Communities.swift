@@ -182,7 +182,9 @@ extension Account {
         let community = key.userID
         let certificate = try DeviceCertificate.issue(for: device, by: key, capabilities: .author,
                                                       issuedMillis: wallClockMillis(), validForMillis: Self.certificateLifetime)
-        let document = try IdentityDocument(user: community, version: 1, certificates: [certificate], displayName: name).signed(by: key)
+        var unsigned = try IdentityDocument(user: community, version: 1, certificates: [certificate], displayName: name)
+        unsigned.endpoints = Self.communityEndpoints(from: endpoints, device: deviceID)
+        let document = try unsigned.signed(by: key)
         try await store.saveIdentityDocument(document, verified: try VerifiedIdentity(verifying: document, for: community))
         let profile = CommunityProfile(community: community, version: 1, name: name, description: description,
                                        visibility: visibility, joinPolicy: joinPolicy, owner: user)
@@ -198,6 +200,32 @@ extension Account {
         try await appendToLog(.community(.profile(signedProfile)), as: community)
         try await publish(.members(added: [user], removed: []), in: community)
         return community
+    }
+
+    /// Where members reach a community: its sequencer's direct address and
+    /// our relays. (Our pods hold our logs, not the community's.)
+    static func communityEndpoints(from mine: Endpoints, device: DeviceID) -> Endpoints? {
+        var endpoints = Endpoints()
+        endpoints.direct = mine.direct.filter { $0.device == device }
+        endpoints.relays = mine.relays
+        return endpoints.isEmpty ? nil : endpoints
+    }
+
+    /// Re-signs our communities' identity documents when our own endpoints
+    /// change, so members can still find them.
+    func refreshCommunityEndpoints() async throws {
+        for state in try loadCommunities() where state.role == .owner {
+            guard let rawKey = state.communityKey,
+                  let signed = try await store.identityDocument(for: state.community)
+            else { continue }
+            var document = try VerifiedIdentity(verifying: signed, for: state.community).document
+            let wanted = Self.communityEndpoints(from: endpoints, device: deviceID)
+            guard document.endpoints != wanted else { continue }
+            document.endpoints = wanted
+            document.version += 1
+            let resigned = try document.signed(by: try IdentityKeyPair(rawRepresentation: rawKey))
+            try await store.saveIdentityDocument(resigned, verified: try VerifiedIdentity(verifying: resigned, for: state.community))
+        }
     }
 
     /// The text to share so others can join. For invite-only communities,

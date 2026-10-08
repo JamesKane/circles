@@ -58,8 +58,7 @@ public struct NodeService: Sendable {
         try await withThrowingTaskGroup(of: Void.self) { group in
             group.addTask {
                 try await listener.run { session in
-                    let report = try await account.syncEngine().run(over: session)
-                    try await account.absorbKeyGrants()
+                    let report = try await account.respond(over: session)
                     await onEvent(.synced(peer: await Self.name(of: report.peer, in: account), direction: .incoming,
                                           received: report.received.values.reduce(0, +), sent: report.sent))
                 }

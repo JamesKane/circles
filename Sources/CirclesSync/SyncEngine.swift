@@ -72,17 +72,51 @@ public struct SyncEngine: Sendable {
         self.now = now
     }
 
-    public func run(over channel: some MessageChannel) async throws -> SyncReport {
+    /// Runs one session. An initiator may name the identity it wants to
+    /// reach on the responder's device (`target`).
+    public func run(over channel: some MessageChannel, target: UserID? = nil) async throws -> SyncReport {
+        try await run(over: channel, target: target, received: nil)
+    }
+
+    /// Answers an incoming session as whichever identity the initiator asked
+    /// for: reads its hello first, then runs the engine `select` returns.
+    public static func respond(
+        over channel: some MessageChannel,
+        select: @Sendable (UserID?) async throws -> SyncEngine?
+    ) async throws -> SyncReport {
+        guard let first = try await channel.receive() else { throw SyncError.connectionClosed }
+        let message: SyncMessage
+        do {
+            message = try CBORDecoder().decode(SyncMessage.self, from: first)
+        } catch {
+            throw SyncError.malformedMessage(error)
+        }
+        guard case .hello(let hello) = message else {
+            throw SyncError.protocolViolation("expected hello")
+        }
+        guard let engine = try await select(hello.target) else {
+            throw SyncError.protocolViolation("no such identity here")
+        }
+        return try await engine.run(over: channel, target: nil, received: hello)
+    }
+
+    private func run(over channel: some MessageChannel, target: UserID?, received: SyncMessage.Hello?) async throws -> SyncReport {
         var report = SyncReport()
 
         // Make sure our own identity document is served to peers who want it.
         let me = try CBORDecoder().decode(IdentityDocument.self, from: identityDocument.payload).user
         try await store.saveIdentityDocument(identityDocument, verified: VerifiedIdentity(verifying: identityDocument, for: me))
 
-        try await send(.hello(.init(version: SyncMessage.protocolVersion, identity: identityDocument)), on: channel)
-        guard let first = try await channel.receive() else { throw SyncError.connectionClosed }
-        guard case .hello(let hello) = try decodeMessage(first) else {
-            throw SyncError.protocolViolation("expected hello")
+        try await send(.hello(.init(version: SyncMessage.protocolVersion, identity: identityDocument, target: target)), on: channel)
+        let hello: SyncMessage.Hello
+        if let received {
+            hello = received
+        } else {
+            guard let first = try await channel.receive() else { throw SyncError.connectionClosed }
+            guard case .hello(let message) = try decodeMessage(first) else {
+                throw SyncError.protocolViolation("expected hello")
+            }
+            hello = message
         }
         let peer = try await authenticate(hello, staticKey: channel.remoteStaticKey)
         report.peer = peer.user

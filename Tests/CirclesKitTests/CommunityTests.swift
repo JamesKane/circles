@@ -157,3 +157,50 @@ struct CommunityTests {
         #expect(try await feed(bob, community) == ["after restart"])
     }
 }
+
+@Suite("Communities through the node")
+struct CommunityNodeTests {
+    @Test("one listener answers as the owner and as the community; members find it from its identity document")
+    func oneListener() async throws {
+        let alice = try await Account.create(home: temporaryHome(), displayName: "Alice")
+        let bob = try await Account.create(home: temporaryHome(), displayName: "Bob")
+        let listener = try await NoiseListener(host: "127.0.0.1", port: 0, handshake: await alice.makeHandshake(role: .responder))
+        let task = Task { try await listener.run { session in _ = try await alice.respond(over: session) } }
+        defer { task.cancel() }
+
+        let community = try await alice.createCommunity(name: "Hikers", visibility: .private, joinPolicy: .open)
+        // Publishing our address re-signs the community's document too.
+        try await alice.setDirectEndpoint(host: "127.0.0.1", port: listener.port)
+        try await bob.joinCommunity(invite: try await alice.communityInvite(community))
+
+        _ = await bob.syncAll(discoveryTimeout: .milliseconds(10))   // join request; admitted
+        _ = await bob.syncAll(discoveryTimeout: .milliseconds(10))   // reads the Welcome
+        #expect(try await bob.communities().first?.role == .member)
+
+        try await bob.post(RichText(plain: "hello hikers"), toCommunity: community)
+        _ = await bob.syncAll(discoveryTimeout: .milliseconds(10))   // alice collects and republishes on receipt
+        _ = await bob.syncAll(discoveryTimeout: .milliseconds(10))
+        #expect(try await feed(alice, community) == ["hello hikers"])
+        #expect(try await feed(bob, community) == ["hello hikers"])
+
+        // The same listener still answers as Alice herself.
+        try await bob.addContact(invite: await alice.invite())
+        try await alice.addContact(invite: await bob.invite())
+        try await alice.post(RichText(plain: "personal"), to: .everyone)
+        let report = try await bob.sync(host: "127.0.0.1", port: listener.port)
+        #expect(report.peer == alice.user)
+        #expect(try await bob.stream().map(\.body.plainText).contains("personal"))
+    }
+
+    @Test("asking a device for a community it doesn't serve fails")
+    func unknownTarget() async throws {
+        let alice = try await Account.create(home: temporaryHome(), displayName: "Alice")
+        let bob = try await Account.create(home: temporaryHome(), displayName: "Bob")
+        let listener = try await NoiseListener(host: "127.0.0.1", port: 0, handshake: await alice.makeHandshake(role: .responder))
+        let task = Task { try await listener.run { session in _ = try await alice.respond(over: session) } }
+        defer { task.cancel() }
+        await #expect(throws: (any Error).self) {
+            try await bob.sync(host: "127.0.0.1", port: listener.port, target: bob.user)
+        }
+    }
+}

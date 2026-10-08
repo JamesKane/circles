@@ -357,6 +357,7 @@ public actor Account {
         identityDocument = signed
         try files.save(Profile(displayName: displayName, identityDocument: signed), to: files.profile)
         try await store.saveIdentityDocument(signed, verified: verified)
+        try await refreshCommunityEndpoints()
     }
 
     /// Certifies a pod from its pairing code and lists it in our identity
@@ -403,23 +404,25 @@ public actor Account {
     // MARK: Syncing
 
     /// Connects to a peer and syncs once.
-    public func sync(host: String, port: Int) async throws -> SyncReport {
+    /// `target` names the identity to reach on that device, e.g. a community
+    /// its owner serves.
+    public func sync(host: String, port: Int, target: UserID? = nil) async throws -> SyncReport {
         let engine = syncEngine()
         let report = try await withNoiseConnection(host: host, port: port, handshake: makeHandshake(role: .initiator)) { session in
-            try await engine.run(over: session)
+            try await engine.run(over: session, target: target)
         }
         try await absorbKeyGrants()
         return report
     }
 
     /// Connects to `target` through a relay and syncs once.
-    public func sync(via relay: RelayEndpoint, to target: AgreementPublicKey) async throws -> SyncReport {
+    public func sync(via relay: RelayEndpoint, to target: AgreementPublicKey, identity: UserID? = nil) async throws -> SyncReport {
         let engine = syncEngine()
         let report = try await withRelayedConnection(
             via: RelayAddress(host: relay.host, port: Int(relay.port), key: relay.key), to: target,
             outer: makeHandshake(role: .initiator), inner: makeHandshake(role: .initiator)
         ) { session in
-            try await engine.run(over: session)
+            try await engine.run(over: session, target: identity)
         }
         try await absorbKeyGrants()
         return report
@@ -432,14 +435,12 @@ public actor Account {
         onReserved: @escaping @Sendable () -> Void = {},
         onSync: @escaping @Sendable (SyncReport) async -> Void = { _ in }
     ) async throws {
-        let engine = syncEngine()
         try await CirclesNet.serveViaRelay(
             RelayAddress(host: relay.host, port: Int(relay.port), key: relay.key),
             outer: makeHandshake(role: .initiator), inner: makeHandshake(role: .responder),
             onReserved: onReserved
         ) { session in
-            let report = try await engine.run(over: session)
-            try await self.absorbKeyGrants()
+            let report = try await self.respond(over: session)
             await onSync(report)
         }
     }
@@ -475,6 +476,15 @@ public actor Account {
             _ = record(await tryRoute(route) { try await self.sync(host: peer.host, port: peer.port) })
         }
 
+        let joined = ((try? loadCommunities()) ?? []).filter { $0.role == .member || $0.role == .pending }
+        // A community's owner, seen on the local network, serves it.
+        for peer in peers where peer.device != deviceID {
+            for state in joined where state.decodedProfile?.owner == peer.user {
+                let route = "\(state.decodedProfile?.name ?? "community") on the local network (\(peer.host):\(peer.port))"
+                _ = record(await tryRoute(route) { try await self.sync(host: peer.host, port: peer.port, target: state.community) })
+            }
+        }
+
         for pod in endpoints.pods {
             let route = "my pod at \(pod.host):\(pod.port)"
             _ = record(await tryRoute(route) { try await self.sync(host: pod.host, port: Int(pod.port)) })
@@ -499,7 +509,43 @@ public actor Account {
                 }
             }
         }
+
+        for state in joined where !reached.contains(state.community) {
+            guard let identity = try? await store.verifiedIdentity(for: state.community) else { continue }
+            let name = state.decodedProfile?.name ?? "community"
+            var done = false
+            for direct in identity.endpoints.direct where !done {
+                let route = "\(name) at \(direct.host):\(direct.port)"
+                done = record(await tryRoute(route) {
+                    try await self.sync(host: direct.host, port: Int(direct.port), target: state.community)
+                })
+            }
+            let devices = identity.certificates.values.filter { $0.capabilities.contains(.author) }
+            for relay in identity.endpoints.relays where !done {
+                for device in devices where !done {
+                    let route = "\(name) via relay \(relay.host):\(relay.port)"
+                    done = record(await tryRoute(route) {
+                        try await self.sync(via: relay, to: device.agreementKey, identity: state.community)
+                    })
+                }
+            }
+        }
+        try? await processCommunities()
         return attempts
+    }
+
+    /// Answers an incoming session as ourselves, or as a community we
+    /// sequence if that's who the peer asked for, then absorbs what arrived.
+    public func respond(over channel: some MessageChannel) async throws -> SyncReport {
+        let me = user
+        let report = try await SyncEngine.respond(over: channel) { target in
+            guard let target, target != me else { return await self.syncEngine() }
+            guard (try? await self.community(target).role) == .owner else { return nil }
+            return try await self.communityEngine(target)
+        }
+        try await absorbKeyGrants()
+        try await processCommunities()
+        return report
     }
 
     private func tryRoute(_ route: String, _ operation: @Sendable () async throws -> SyncReport) async -> SyncAttempt {
