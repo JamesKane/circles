@@ -10,8 +10,16 @@ final class AppModel {
     enum Phase {
         case loading
         case onboarding(OnboardingScreenModel)
-        case ready(Account, NetworkModel)
+        case ready(Session)
         case failed(String)
+    }
+
+    /// The models that live as long as the open account.
+    struct Session {
+        let account: Account
+        let network: NetworkModel
+        let stream: StreamScreenModel
+        let media: MediaLoader
     }
 
     private(set) var phase: Phase = .loading
@@ -31,7 +39,7 @@ final class AppModel {
     }
 
     var network: NetworkModel? {
-        if case .ready(_, let network) = phase { network } else { nil }
+        if case .ready(let session) = phase { session.network } else { nil }
     }
 
     func launch() async {
@@ -50,9 +58,10 @@ final class AppModel {
     /// Shows the main UI and goes online.
     func start(_ account: Account) {
         if case .ready = phase { return }
-        let network = NetworkModel(account: account)
-        phase = .ready(account, network)
-        network.send(.start)
+        let session = Session(account: account, network: NetworkModel(account: account),
+                              stream: StreamScreenModel(account: account), media: MediaLoader(account: account))
+        phase = .ready(session)
+        session.network.send(.start)
     }
 
     /// Stops the network, giving up after a few seconds so quitting can't hang.

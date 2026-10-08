@@ -11,8 +11,8 @@ struct RootView: View {
             ProgressView()
         case .onboarding(let model):
             OnboardingView(model: model) { app.start($0) }
-        case .ready(_, let network):
-            MainView(network: network)
+        case .ready(let session):
+            StreamView(session: session)
         case .failed(let message):
             ContentUnavailableView {
                 Label("Couldn't open your account", systemImage: "exclamationmark.triangle")
@@ -54,44 +54,6 @@ struct OnboardingView: View {
         .onChange(of: name) { model.send(.editName(name)) }
         .onChange(of: model.state.phase) {
             if model.state.phase == .done, let account = model.account { onCreated(account) }
-        }
-    }
-}
-
-/// Until the Stream is built: the network status line and its activity log.
-struct MainView: View {
-    let network: NetworkModel
-
-    var body: some View {
-        NavigationStack {
-            Group {
-                if network.state.activity.isEmpty {
-                    ContentUnavailableView("No network activity yet", systemImage: "antenna.radiowaves.left.and.right")
-                } else {
-                    List(Array(network.state.activity.enumerated()), id: \.offset) { _, line in
-                        Text(line)
-                            .font(.callout.monospaced())
-                    }
-                }
-            }
-            .navigationTitle("Circles")
-            .toolbar {
-                ToolbarItem {
-                    Button("Sync Now", systemImage: "arrow.triangle.2.circlepath") { network.send(.syncNow) }
-                        .disabled(network.state.syncing)
-                }
-            }
-            .safeAreaInset(edge: .bottom) {
-                TimelineView(.periodic(from: .now, by: 30)) { context in
-                    Text(network.state.summary(now: context.date))
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal)
-                        .padding(.vertical, 6)
-                }
-                .background(.bar)
-            }
         }
     }
 }
