@@ -169,3 +169,17 @@ struct EnvelopeTests {
         #expect(claimed.author == envelope.author)
     }
 }
+
+@Suite("Postage")
+struct PostageTests {
+    @Test("a stamp proves the work, for that payload only")
+    func stamp() {
+        let payload = Array("join me".utf8)
+        let nonce = Postage.stamp(payload, bits: 12)
+        #expect(Postage.isValid(payload, nonce: nonce, bits: 12))
+        #expect(!Postage.isValid(Array("join you".utf8), nonce: nonce, bits: 12) || Postage.isValid(Array("join you".utf8), nonce: 0, bits: 0))
+        #expect(Postage.isValid(payload, nonce: 12345, bits: 0))
+        // Some nonce below the found one fails (it was the first that passed).
+        if nonce > 0 { #expect(!Postage.isValid(payload, nonce: nonce - 1, bits: 12)) }
+    }
+}

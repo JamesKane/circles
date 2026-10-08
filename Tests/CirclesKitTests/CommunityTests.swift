@@ -138,6 +138,29 @@ struct CommunityTests {
         #expect(try await alice.communityMembers(community).map(\.user) == [alice.user])
     }
 
+    @Test("join requests to open and approval communities must carry proof of work")
+    func postage() async throws {
+        let alice = try await Account.create(home: temporaryHome(), displayName: "Alice")
+        let bob = try await Account.create(home: temporaryHome(), displayName: "Bob")
+        let community = try await alice.createCommunity(name: "Open", visibility: .public, joinPolicy: .open, postageBits: 10)
+        let peer = PeerInfo(user: bob.user, identity: try VerifiedIdentity(verifying: await bob.identityDocument, for: bob.user), device: nil)
+        var request = JoinRequest(community: community, user: bob.user, keyPackage: nil, invite: nil, createdMillis: wallClockMillis())
+        await #expect(throws: CommunityError.postageRequired) {
+            try await alice.receiveJoinRequest(try await bob.signForTesting(request, label: .communityJoin), from: peer, for: community)
+        }
+        // Too little work fails too.
+        request.postage = Postage.stamp(try request.postagePayload, bits: 2)
+        if !Postage.isValid(try request.postagePayload, nonce: request.postage!, bits: 10) {
+            await #expect(throws: CommunityError.postageRequired) {
+                try await alice.receiveJoinRequest(try await bob.signForTesting(request, label: .communityJoin), from: peer, for: community)
+            }
+        }
+        // The real flow stamps, and gets in.
+        try await bob.joinCommunity(invite: try await alice.communityInvite(community))
+        try await round(alice, community, bob)
+        #expect(try await bob.communities().first?.role == .member)
+    }
+
     @Test("the owner can remove an item; non-members can't post")
     func moderation() async throws {
         let alice = try await Account.create(home: temporaryHome(), displayName: "Alice")

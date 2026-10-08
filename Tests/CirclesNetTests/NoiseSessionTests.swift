@@ -90,7 +90,7 @@ struct NoiseSessionTests {
             try await bobEngine.run(over: session)
         }
         #expect(report.peer == alice.user)
-        #expect(report.received[alice.user] == 50)
+        #expect(report.received[alice.user] == 50, "report: \(report)")
         #expect(try await bob.store.allEntries(author: alice.user).count == 50)
     }
 

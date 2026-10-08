@@ -8,7 +8,9 @@ import CirclesStorage
 @testable import CirclesKit
 
 func temporaryHome() -> URL {
-    FileManager.default.temporaryDirectory.appendingPathComponent("circles-test-\(UUID().uuidString)")
+    // Join-request proof of work at test strength (debug builds hash slowly).
+    Account.defaultJoinPostageBits = 8
+    return FileManager.default.temporaryDirectory.appendingPathComponent("circles-test-\(UUID().uuidString)")
 }
 
 /// Serves `account`'s sync engine on a random local port for the duration of `body`.

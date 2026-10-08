@@ -8,7 +8,9 @@ import CirclesSync
 @testable import CirclesPresentation
 
 func temporaryHome() -> URL {
-    FileManager.default.temporaryDirectory.appendingPathComponent("circles-ui-\(UUID().uuidString)")
+    // Join-request proof of work at test strength (debug builds hash slowly).
+    Account.defaultJoinPostageBits = 8
+    return FileManager.default.temporaryDirectory.appendingPathComponent("circles-ui-\(UUID().uuidString)")
 }
 
 /// `a` syncs with `b` over real TCP.
