@@ -172,7 +172,7 @@ Re-check `swift-nio-quic` at each milestone boundary.
   - UPnP was added because the test network's router, like most consumer routers, speaks only UPnP.
   - Mappings are renewed at half their lifetime and removed on shutdown.
   - `circles serve --map-port` maps the listening port. `--publish-direct` also lists the public address in `endpoints.direct`. That's opt-in, because it reveals the address to everyone who receives the identity document.
-  - Gateway discovery for NAT-PMP and PCP reads `/proc/net/route` and so is Linux-only for now. UPnP finds the router by multicast, so it works everywhere.
+  - Gateway discovery for NAT-PMP and PCP reads `/proc/net/route` on Linux and the routing table (`sysctl` `NET_RT_FLAGS`) on Apple platforms, preferring the unscoped default route. Windows has none yet. UPnP finds the router by multicast, so it works everywhere.
   - Router quirk seen in testing: some routers store the wildcard remote host as `0.0.0.0` and answer `GetSpecificPortMappingEntry` only in that form (deleting works with the empty string). Lookups try both.
 - **Route order** (`Account.syncAll`):
   1. peers found by mDNS

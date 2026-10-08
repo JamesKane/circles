@@ -52,6 +52,63 @@ struct PortMappingTests {
         #expect(PortMapper.parseLinuxRouteTable(table) == "192.168.0.1")
     }
 
+    /// One `rt_msghdr` plus its sockaddrs, laid out as Darwin's sysctl dump does.
+    static func darwinRoute(flags: UInt32, destination: [UInt8], gateway: [UInt8]?, netmask: [UInt8]? = nil) -> [UInt8] {
+        func sockaddrIn(_ ip: [UInt8]) -> [UInt8] { [16, 2, 0, 0] + ip + [UInt8](repeating: 0, count: 8) }
+        func le32(_ value: UInt32) -> [UInt8] { (0..<4).map { UInt8((value >> (8 * $0)) & 0xFF) } }
+        var addrs: UInt32 = 0x1
+        var body = sockaddrIn(destination)
+        if let gateway {
+            addrs |= 0x2
+            // An empty gateway stands for a link-layer one (AF_LINK, family 18).
+            body += gateway.isEmpty ? [20, 18] + [UInt8](repeating: 0, count: 18) : sockaddrIn(gateway)
+        }
+        if let netmask {
+            addrs |= 0x4
+            body += netmask.isEmpty ? [0, 0, 0, 0] : sockaddrIn(netmask)
+        }
+        var header = [UInt8](repeating: 0, count: 92)
+        let length = header.count + body.count
+        header[0] = UInt8(length & 0xFF); header[1] = UInt8(length >> 8)
+        header[2] = 5
+        header.replaceSubrange(8..<12, with: le32(flags))
+        header.replaceSubrange(12..<16, with: le32(addrs))
+        return header + body
+    }
+
+    @Test("a Darwin route dump yields the primary default gateway")
+    func darwinRoutes() {
+        let up: UInt32 = 0x1, gateway: UInt32 = 0x2, scoped: UInt32 = 0x100_0000
+        let subnet = Self.darwinRoute(flags: up | gateway, destination: [10, 8, 0, 0], gateway: [192, 168, 0, 254],
+                                      netmask: [255, 255, 0, 0])
+        let linkDefault = Self.darwinRoute(flags: up | gateway, destination: [0, 0, 0, 0], gateway: [], netmask: [])
+        let scopedDefault = Self.darwinRoute(flags: up | gateway | scoped, destination: [0, 0, 0, 0], gateway: [10, 0, 0, 1], netmask: [])
+        let primaryDefault = Self.darwinRoute(flags: up | gateway, destination: [0, 0, 0, 0], gateway: [192, 168, 0, 1], netmask: [])
+        let downDefault = Self.darwinRoute(flags: gateway, destination: [0, 0, 0, 0], gateway: [172, 16, 0, 1])
+
+        #expect(PortMapper.parseDarwinRouteDump(subnet + linkDefault + scopedDefault + primaryDefault) == "192.168.0.1")
+        #expect(PortMapper.parseDarwinRouteDump(subnet + scopedDefault) == "10.0.0.1")
+        #expect(PortMapper.parseDarwinRouteDump(downDefault + subnet + linkDefault) == nil)
+        #expect(PortMapper.parseDarwinRouteDump([]) == nil)
+        // Truncated input stops cleanly.
+        #expect(PortMapper.parseDarwinRouteDump(Array(primaryDefault.prefix(100))) == nil)
+    }
+
+    #if canImport(Darwin)
+    @Test("the Darwin route-message layout matches net/route.h")
+    func darwinLayout() {
+        typealias M = PortMapper.DarwinRouteMessage
+        #expect(MemoryLayout<rt_msghdr>.size == M.headerSize)
+        #expect(MemoryLayout<rt_msghdr>.offset(of: \.rtm_version) == M.versionOffset)
+        #expect(MemoryLayout<rt_msghdr>.offset(of: \.rtm_flags) == M.flagsOffset)
+        #expect(MemoryLayout<rt_msghdr>.offset(of: \.rtm_addrs) == M.addrsOffset)
+        #expect(Int32(M.version) == RTM_VERSION && Int32(M.familyInet) == AF_INET)
+        #expect(Int32(M.flagUp) == RTF_UP && Int32(M.flagGateway) == RTF_GATEWAY && Int32(M.flagInterfaceScoped) == RTF_IFSCOPE)
+        #expect(Int32(M.addressDestination) == RTA_DST && Int32(M.addressGateway) == RTA_GATEWAY
+                && Int32(M.addressNetmask) == RTA_NETMASK)
+    }
+    #endif
+
     @Test("a UPnP device description yields the WAN connection's control URL")
     func upnpDescription() {
         let xml = """
