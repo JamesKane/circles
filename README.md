@@ -85,6 +85,8 @@ In progress. Needs Xcode 27 (Swift 6.4). Open `Apps/Apple/Circles.xcodeproj`, or
 xcodebuild -project Apps/Apple/Circles.xcodeproj -scheme Circles build
 ```
 
+It builds signed to run locally. To sign with your own team, which macOS needs before it reliably grants the app Local Network access, copy `Apps/Apple/Config/Local.xcconfig.example` to `Local.xcconfig` and set your team ID.
+
 The app is sandboxed and keeps its data in its container's Application Support folder. So far it has onboarding, the Stream, posts with comments, +1s and resharing, and the composer; People, Circles and Settings come next.
 
 ## Layout

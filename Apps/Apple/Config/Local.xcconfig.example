@@ -1,0 +1,6 @@
+// Copy to Local.xcconfig (ignored by git) to sign with your own team.
+// Your team ID is the OU in your Apple Development certificate, or under
+// Membership in your Apple Developer account.
+
+CODE_SIGN_IDENTITY = Apple Development
+DEVELOPMENT_TEAM = ABCDE12345

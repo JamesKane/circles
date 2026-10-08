@@ -6,3 +6,4 @@ DerivedData/
 .DS_Store
 # The Apple app's project is hand-maintained; anything else is generated.
 !Apps/Apple/Circles.xcodeproj/
+Apps/Apple/Config/Local.xcconfig
