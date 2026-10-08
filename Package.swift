@@ -27,6 +27,7 @@ let package = Package(
         .executable(name: "circles-pod", targets: ["circles-pod"]),
         .executable(name: "circles-relay", targets: ["circles-relay"]),
         .executable(name: "circles-push", targets: ["circles-push"]),
+        .executable(name: "circles-sim", targets: ["circles-sim"]),
     ],
     dependencies: [
         .package(url: "https://github.com/apple/swift-crypto.git", "4.0.0"..<"6.0.0"),
@@ -139,6 +140,12 @@ let package = Package(
         .executableTarget(
             name: "circles-push",
             dependencies: ["CirclesKit", "CirclesPush", "CirclesNet", "CirclesCLISupport",
+                           .product(name: "ArgumentParser", package: "swift-argument-parser")],
+            swiftSettings: swiftSettings
+        ),
+        .executableTarget(
+            name: "circles-sim",
+            dependencies: ["CirclesCore", "CirclesCrypto", "CirclesDHT",
                            .product(name: "ArgumentParser", package: "swift-argument-parser")],
             swiftSettings: swiftSettings
         ),

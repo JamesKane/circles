@@ -201,9 +201,9 @@ public actor DHTNode {
     }
 
     /// Finds the newest identity document for `user` the network holds.
-    public func find(_ user: UserID) async -> SignedObject? {
+    public func find(_ user: UserID, paths: Int = DHTNode.lookupPaths) async -> SignedObject? {
         let key = NodeID(user: user)
-        let found = await lookup(key, value: key, paths: Self.lookupPaths).records.compactMap { record -> (SignedObject, UInt64)? in
+        let found = await lookup(key, value: key, paths: paths).records.compactMap { record -> (SignedObject, UInt64)? in
             guard let verified = Self.verify(record), verified.user == user else { return nil }
             return (record, verified.version)
         }
@@ -214,11 +214,11 @@ public actor DHTNode {
     /// Returns how many accepted it, counting ourselves when we listen
     /// (others can then find it here).
     @discardableResult
-    public func publish(_ document: SignedObject) async -> Int {
+    public func publish(_ document: SignedObject, paths: Int = DHTNode.lookupPaths) async -> Int {
         guard let verified = Self.verify(document) else { return 0 }
         let key = NodeID(user: verified.user)
         let keptHere = accept(document) && listenPort != nil
-        let targets = await lookup(key, value: nil, paths: Self.lookupPaths).closest
+        let targets = await lookup(key, value: nil, paths: paths).closest
         return await withTaskGroup(of: Bool.self) { group in
             for contact in targets {
                 group.addTask { [transport, listenPort] in
