@@ -19,6 +19,7 @@ let package = Package(
         .library(name: "CirclesStorage", targets: ["CirclesStorage"]),
         .library(name: "CirclesKit", targets: ["CirclesKit"]),
         .library(name: "CirclesMLS", targets: ["CirclesMLS"]),
+        .library(name: "CirclesDHT", targets: ["CirclesDHT"]),
         .library(name: "CirclesPresentation", targets: ["CirclesPresentation"]),
         .executable(name: "circles", targets: ["circles-cli"]),
         .executable(name: "circles-pod", targets: ["circles-pod"]),
@@ -69,6 +70,11 @@ let package = Package(
         .target(
             name: "CirclesStorage",
             dependencies: ["CirclesCore", "CirclesCrypto", "CirclesSync", "CSQLite"],
+            swiftSettings: swiftSettings
+        ),
+        .target(
+            name: "CirclesDHT",
+            dependencies: ["CirclesCore", "CirclesCrypto", .product(name: "Crypto", package: "swift-crypto")],
             swiftSettings: swiftSettings
         ),
         .target(
@@ -143,6 +149,11 @@ let package = Package(
         .testTarget(
             name: "CirclesPresentationTests",
             dependencies: ["CirclesPresentation", "CirclesNet"],
+            swiftSettings: swiftSettings
+        ),
+        .testTarget(
+            name: "CirclesDHTTests",
+            dependencies: ["CirclesDHT", "CirclesSync"],
             swiftSettings: swiftSettings
         ),
         .testTarget(
