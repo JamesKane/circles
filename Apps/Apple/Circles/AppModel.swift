@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import CirclesCore
 import CirclesKit
 import CirclesPresentation
 
@@ -19,10 +20,19 @@ final class AppModel {
         let account: Account
         let network: NetworkModel
         let stream: StreamScreenModel
+        let people: PeopleScreenModel
+        let circles: CirclesScreenModel
+        let communities: CommunitiesScreenModel
+        let settings: SettingsScreenModel
         let media: MediaLoader
+        /// Sleep, wake, network changes and App Nap.
+        let lifecycle: NetworkLifecycle
     }
 
     private(set) var phase: Phase = .loading
+    /// A post to show, e.g. from a clicked notification. The main window
+    /// opens it and clears this.
+    var postToOpen: ObjectRef?
     let home: URL
 
     init(home: URL = AppModel.defaultHome()) {
@@ -30,17 +40,25 @@ final class AppModel {
     }
 
     /// Application Support (inside the sandbox container), or $CIRCLES_HOME,
-    /// which must also be inside the container.
+    /// which must also be inside the container. With CIRCLES_FRESH_HOME=1
+    /// (UI tests), a new empty directory each launch, so the app starts at
+    /// onboarding.
     static func defaultHome() -> URL {
-        if let path = ProcessInfo.processInfo.environment["CIRCLES_HOME"] {
+        let environment = ProcessInfo.processInfo.environment
+        if environment["CIRCLES_FRESH_HOME"] == "1" {
+            return URL.temporaryDirectory.appending(path: "circles-fresh-\(UUID().uuidString)", directoryHint: .isDirectory)
+        }
+        if let path = environment["CIRCLES_HOME"] {
             return URL(filePath: path, directoryHint: .isDirectory)
         }
         return URL.applicationSupportDirectory.appending(path: "Circles", directoryHint: .isDirectory)
     }
 
-    var network: NetworkModel? {
-        if case .ready(let session) = phase { session.network } else { nil }
+    var session: Session? {
+        if case .ready(let session) = phase { session } else { nil }
     }
+
+    var network: NetworkModel? { session?.network }
 
     func launch() async {
         guard case .loading = phase else { return }
@@ -58,15 +76,26 @@ final class AppModel {
     /// Shows the main UI and goes online.
     func start(_ account: Account) {
         if case .ready = phase { return }
-        let session = Session(account: account, network: NetworkModel(account: account),
-                              stream: StreamScreenModel(account: account), media: MediaLoader(account: account))
+        let services = MacServices()
+        let network = NetworkModel(account: account)
+        let session = Session(account: account, network: network,
+                              stream: StreamScreenModel(account: account),
+                              people: PeopleScreenModel(account: account, services: services),
+                              circles: CirclesScreenModel(account: account),
+                              communities: CommunitiesScreenModel(account: account),
+                              settings: SettingsScreenModel(account: account, services: services),
+                              media: MediaLoader(account: account),
+                              lifecycle: NetworkLifecycle(network: network))
         phase = .ready(session)
         session.network.send(.start)
+        session.lifecycle.start()
     }
 
     /// Stops the network, giving up after a few seconds so quitting can't hang.
     func shutdown() async {
-        guard let network else { return }
+        guard let session else { return }
+        session.lifecycle.stop()
+        let network = session.network
         await withTaskGroup(of: Void.self) { group in
             group.addTask { await network.perform(.stop) }
             group.addTask { try? await Task.sleep(for: .seconds(3)) }

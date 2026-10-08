@@ -105,7 +105,12 @@ let package = Package(
                 .product(name: "SecretBytes", package: "swift-secret-bytes"),
                 .product(name: "Crypto", package: "swift-crypto"),
             ],
-            swiftSettings: swiftSettings
+            // Unoptimized even in release builds: with -O, Swift 6.4 inlines
+            // destruction of swift-mls 0.1.7 values that hold its internal
+            // `Group.MessageSecrets`, leaving an undefined reference to that
+            // type's metadata, so release builds fail to link. This module
+            // is a thin wrapper, so the cost is small. Remove once fixed.
+            swiftSettings: swiftSettings + [.unsafeFlags(["-Onone"], .when(configuration: .release))]
         ),
         .target(
             name: "CirclesKit",
@@ -114,7 +119,7 @@ let package = Package(
         ),
         .target(
             name: "CirclesPresentation",
-            dependencies: ["CirclesKit"],
+            dependencies: ["CirclesKit", "CirclesDHT"],
             swiftSettings: swiftSettings
         ),
         .target(

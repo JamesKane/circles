@@ -56,7 +56,8 @@ public enum NodeEvent: Sendable, Equatable {
     case portMapped(external: String)
     case portMappingRemoved
     case portMappingUnavailable(String)
-    /// `received` counts new log entries; nonzero means there's new content.
+    /// `received` counts new log entries and, for incoming sessions, control
+    /// messages acted on (join requests); nonzero means there's something new.
     case synced(peer: String, direction: Direction, received: Int, sent: Int)
     case syncFailed(route: String, reason: String)
     case syncRoundFinished
@@ -87,7 +88,7 @@ public struct NodeService: Sendable {
                 try await listener.run { session in
                     guard let report = try await account.respond(over: session) else { return } // a DHT request
                     await onEvent(.synced(peer: await Self.name(of: report.peer, in: account), direction: .incoming,
-                                          received: report.received.values.reduce(0, +), sent: report.sent))
+                                          received: Self.news(in: report), sent: report.sent))
                 }
             }
             if preferences.advertiseOnLocalNetwork {
@@ -168,7 +169,7 @@ public struct NodeService: Sendable {
                     Task { await onEvent(.reachableViaRelay(name)) }
                 }, onSync: { report in
                     await onEvent(.synced(peer: await Self.name(of: report.peer, in: account) + " via relay", direction: .incoming,
-                                          received: report.received.values.reduce(0, +), sent: report.sent))
+                                          received: Self.news(in: report), sent: report.sent))
                 })
             } catch is CancellationError {
                 return
@@ -177,6 +178,13 @@ public struct NodeService: Sendable {
             }
             try? await Task.sleep(for: .seconds(30))
         }
+    }
+
+    /// What an incoming session brought: new log entries, and control
+    /// messages acted on (a join request for a community we own), so UIs
+    /// refresh for either.
+    static func news(in report: SyncReport) -> Int {
+        report.received.values.reduce(0, +) + report.controlsAccepted
     }
 
     private static func name(of user: UserID?, in account: Account) async -> String {

@@ -67,7 +67,11 @@ public struct PeopleState: Sendable, Equatable {
     public var notice: String?
     public var phase: Phase = .idle
 
-    public var canAdd: Bool { inviteDraft.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("circles-invite:") }
+    /// An invite, or a user ID to look up in the DHT.
+    public var canAdd: Bool {
+        let text = inviteDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        return phase != .loading && (text.hasPrefix("circles-invite:") || UserID(text) != nil)
+    }
 }
 
 public enum PeopleIntent: Sendable {
@@ -81,8 +85,9 @@ public enum PeopleIntent: Sendable {
     case remove(UserID)
 }
 
-/// Adding people: exchange invites (docs/DESIGN.md §6.3). Both sides add
-/// each other's invite before they can sync.
+/// Adding people: exchange invites (docs/DESIGN.md §6.3), or add someone by
+/// user ID when their identity is in the DHT (§7.2). Both sides add each
+/// other before they can sync.
 @MainActor
 @Observable
 public final class PeopleScreenModel: ScreenModel {
@@ -103,6 +108,22 @@ public final class PeopleScreenModel: ScreenModel {
             state.inviteDraft = text
         case .addContact:
             guard state.canAdd else { return }
+            if let user = UserID(state.inviteDraft.trimmingCharacters(in: .whitespacesAndNewlines)) {
+                state.notice = nil
+                state.phase = .loading
+                do {
+                    let contact = try await account.addContact(user: user)
+                    state.inviteDraft = ""
+                    state.notice = "Found \(contact.name) in the DHT and added them. They need to add you too, then you can sync."
+                    state.phase = .idle
+                    await reload()
+                } catch AccountError.notFoundInDHT {
+                    state.phase = .failed("Couldn't find them in the DHT. Ask them for an invite instead.")
+                } catch {
+                    state.phase = .failed("Couldn't add them: \(error)")
+                }
+                return
+            }
             do {
                 let contact = try await account.addContact(invite: state.inviteDraft)
                 state.inviteDraft = ""

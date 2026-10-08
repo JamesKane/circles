@@ -47,12 +47,30 @@
       }
     },
     {
+      "identity" : "swift-mls",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/germ-network/swift-mls.git",
+      "state" : {
+        "revision" : "e6e0350a80b6f6cfd2a2a7ec8124480b26b7adae",
+        "version" : "0.1.7"
+      }
+    },
+    {
       "identity" : "swift-nio",
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/apple/swift-nio.git",
       "state" : {
         "revision" : "6db9d9abd92ad7399b8a564cafbb87d3507245fa",
         "version" : "2.104.0"
+      }
+    },
+    {
+      "identity" : "swift-secret-bytes",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/germ-network/swift-secret-bytes.git",
+      "state" : {
+        "revision" : "4f7d36ba92cc594bd5487d9053c39b05fe9e0105",
+        "version" : "0.7.1"
       }
     },
     {

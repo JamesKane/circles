@@ -24,9 +24,11 @@ public enum Format {
         return "\(tenths / 10).\(tenths % 10) MB"
     }
 
-    /// Up to two initials for an avatar placeholder.
+    /// Up to two initials for an avatar placeholder, from the first letter
+    /// or digit of each word, so "Bob (work)" gives "BW", not "B(".
     public static func initials(_ name: String) -> String {
-        String(name.split(separator: " ").prefix(2).compactMap(\.first)).uppercased()
+        let words = name.split(separator: " ").compactMap { $0.first { $0.isLetter || $0.isNumber } }
+        return String(words.prefix(2)).uppercased()
     }
 }
 
