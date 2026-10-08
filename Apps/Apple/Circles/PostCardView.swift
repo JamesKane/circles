@@ -15,6 +15,10 @@ struct PostCardView: View {
     var onOpen: () -> Void = {}
     var onReshare: () -> Void = {}
     var onRemoveComment: (CommentRow) -> Void = { _ in }
+    /// With `card.canDelete`, a "…" menu in the header offers this (right-
+    /// clicking the post's selectable text shows the text menu instead).
+    var onDelete: (() -> Void)?
+    var deleteLabel = "Delete Post…"
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -41,7 +45,7 @@ struct PostCardView: View {
     }
 
     private var header: some View {
-        HStack(spacing: 10) {
+        HStack(alignment: .top, spacing: 10) {
             AvatarView(name: card.authorName, initials: card.authorInitials)
             VStack(alignment: .leading, spacing: 2) {
                 Text(card.authorName)
@@ -54,6 +58,18 @@ struct PostCardView: View {
                 }
                 .font(.caption)
                 .foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 0)
+            if card.canDelete, let onDelete {
+                Menu("Post Actions", systemImage: "ellipsis") {
+                    Button(deleteLabel, role: .destructive, action: onDelete)
+                }
+                .labelStyle(.iconOnly)
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .fixedSize()
+                .foregroundStyle(.secondary)
+                .accessibilityIdentifier("post-actions")
             }
         }
     }

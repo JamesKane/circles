@@ -57,7 +57,8 @@ struct StreamView: View {
                         PostCardView(card: card, media: session.media, generation: network.state.newContentCount,
                                      onPlusOne: { stream.send(.setPlusOne(card.reference, !card.plusOnedByMe)) },
                                      onOpen: { path.append(PostRoute(post: card.reference)) },
-                                     onReshare: { path.append(PostRoute(post: card.reference, reshare: true)) })
+                                     onReshare: { path.append(PostRoute(post: card.reference, reshare: true)) },
+                                     onDelete: { deleting = card })
                             .contentShape(.rect)
                             .onTapGesture { path.append(PostRoute(post: card.reference)) }
                             .contextMenu {

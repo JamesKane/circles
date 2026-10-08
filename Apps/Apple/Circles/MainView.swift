@@ -6,7 +6,7 @@ import CirclesPresentation
 /// under each.
 struct MainView: View {
     enum Section: Hashable {
-        case stream, people, circles
+        case stream, people, circles, communities
     }
 
     let app: AppModel
@@ -22,6 +22,7 @@ struct MainView: View {
                 Label("Stream", systemImage: "rectangle.stack").tag(Section.stream).accessibilityIdentifier("sidebar-stream")
                 Label("People", systemImage: "person.2").tag(Section.people).accessibilityIdentifier("sidebar-people")
                 Label("Circles", systemImage: "circle.circle").tag(Section.circles).accessibilityIdentifier("sidebar-circles")
+                Label("Communities", systemImage: "person.3").tag(Section.communities).accessibilityIdentifier("sidebar-communities")
             }
             .navigationSplitViewColumnWidth(min: 150, ideal: 170, max: 220)
         } detail: {
@@ -30,6 +31,7 @@ struct MainView: View {
                 case .stream: StreamView(session: session, path: $streamPath)
                 case .people: PeopleView(model: session.people)
                 case .circles: CirclesView(model: session.circles)
+                case .communities: CommunitiesView(session: session)
                 }
             }
             .safeAreaInset(edge: .bottom, spacing: 0) { StatusBar(network: network) }

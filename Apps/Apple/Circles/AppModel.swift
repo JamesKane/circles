@@ -22,6 +22,7 @@ final class AppModel {
         let stream: StreamScreenModel
         let people: PeopleScreenModel
         let circles: CirclesScreenModel
+        let communities: CommunitiesScreenModel
         let settings: SettingsScreenModel
         let media: MediaLoader
         /// Sleep, wake, network changes and App Nap.
@@ -81,6 +82,7 @@ final class AppModel {
                               stream: StreamScreenModel(account: account),
                               people: PeopleScreenModel(account: account, services: services),
                               circles: CirclesScreenModel(account: account),
+                              communities: CommunitiesScreenModel(account: account),
                               settings: SettingsScreenModel(account: account, services: services),
                               media: MediaLoader(account: account),
                               lifecycle: NetworkLifecycle(network: network))

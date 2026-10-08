@@ -6,7 +6,7 @@ import CirclesKit
 /// The first-run journey through the real app, like the GNOME app's
 /// `--snapshot` self-test: onboarding, adding a contact by invite, receiving
 /// their post through an incoming sync, +1, commenting (pending, then
-/// approved), posting, circles and settings. The test runner plays the
+/// approved), posting, circles, settings and a community. The test runner plays the
 /// second person, Bob, with CirclesKit, syncing with the app over loopback.
 /// A screenshot of each step is attached to the test result.
 @MainActor
@@ -121,6 +121,45 @@ final class FirstRunUITests: XCTestCase {
         accountTab.click() // Settings reopens on the last tab used
         try await waitFor(text(app, "Copy User ID"), because: "the Account tab shows the identity")
         snapshot(app, "9-settings")
+        app.typeKey("w", modifierFlags: .command) // close Settings
+
+        try await communities(app, bob: bob, port: port)
+    }
+
+    /// Alice creates a private community; Bob asks to join with her invite,
+    /// is let in, and posts; it all reaches the open community page.
+    private func communities(_ app: XCUIApplication, bob: Account, port: Int) async throws {
+        app.descendants(matching: .any)["sidebar-communities"].click()
+        try await waitFor(text(app, "No communities yet"), because: "Communities starts empty")
+        snapshot(app, "10-communities-empty")
+
+        app.buttons["new-community"].click()
+        let name = app.textFields["community-name"]
+        XCTAssertTrue(name.waitForExistence(timeout: 10), "New Community… opened its sheet")
+        name.click()
+        name.typeText("Ridge Walkers")
+        snapshot(app, "11-new-community")
+        app.buttons["create-community"].click()
+        try await waitFor(text(app, "Private · Approval needed · Owner"), because: "the new community opened, owned by us")
+
+        NSPasteboard.general.clearContents()
+        app.buttons["community-invite"].click()
+        let invite = try await pasteboardString(prefix: "circles-community:")
+        let community = try await bob.joinCommunity(invite: invite)
+        _ = try await bob.sync(host: "127.0.0.1", port: port, target: community)
+        let letIn = app.buttons["let-in-Bob Marley"]
+        try await waitFor(letIn, timeout: 15, because: "Bob's join request reached the open community page")
+        snapshot(app, "12-community-request")
+
+        letIn.click()
+        try await waitFor(letIn, "exists == false", because: "letting Bob in cleared the request")
+        _ = try await bob.sync(host: "127.0.0.1", port: port, target: community)
+        try await bob.processCommunities()
+        _ = try await bob.post(RichText(plain: "Count me in for Saturday. I'll bring the good trail mix."), toCommunity: community)
+        _ = try await bob.sync(host: "127.0.0.1", port: port, target: community)
+        try await waitFor(text(app, "Count me in for Saturday"), timeout: 15, because: "Bob's post reached the community page")
+        try await waitFor(text(app, "Bob Marley"), because: "Bob is listed as a member")
+        snapshot(app, "13-community")
     }
 
     // MARK: Helpers
