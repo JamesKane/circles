@@ -8,6 +8,8 @@ public enum Route: Sendable, Hashable {
     case post(ObjectRef)
     case composer
     case circles
+    case communities
+    case community(UserID)
 }
 
 @MainActor
