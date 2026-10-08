@@ -342,6 +342,7 @@ Edits are new objects that supersede earlier ones (`supersedes: CID`). Deletes a
 - **`BlobRef`** (chunk IDs, key, digest, size, media type, dimensions) lives *inside* the post, so only the post's audience gets the key.
 - **Fetching is eager, not lazy (for now).** A log entry lists its chunk IDs in an optional cleartext `blobs` field. Every node that stores the entry, pods included, asks for the chunks in the same sync session (`entriesDone` → `wantBlobs` → `blob` → `done`). This is what makes photos work through a pod while the author is offline. The list reveals no more than the entry's size already does. Lazy fetching and caching policies can come later.
 - Thumbnails aren't generated yet.
+- **Location is stripped before posting** (decided 2026-10-08). `Account.post` runs every attachment through `LocationScrubber`, pure Swift so every platform behaves the same. It finds the format from the bytes. In JPEG, PNG, WebP and TIFF it zeroes and unlinks the EXIF GPS directory in place, so the image data is untouched, and drops XMP that mentions GPS. GIF and non-image data pass through. HEIC, AVIF and MP4/MOV can carry location too but can't be edited yet, so they're **refused** rather than posted as they are; the Mac app converts HEIC to JPEG first.
 
 ### 9.4 Comments, +1s, and threads
 

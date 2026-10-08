@@ -17,7 +17,8 @@ extension Account {
         try reload()
         var references: [BlobRef] = []
         for attachment in attachments {
-            let sealed = try MediaEncryption.seal(attachment.data, mediaType: attachment.mediaType,
+            // Never post where a photo was taken (LocationScrubber).
+            let sealed = try MediaEncryption.seal(try LocationScrubber.scrub(attachment.data), mediaType: attachment.mediaType,
                                                   width: attachment.width, height: attachment.height)
             for chunk in sealed.chunks { try await store.putBlob(chunk) }
             references.append(sealed.reference)
