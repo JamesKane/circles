@@ -3,15 +3,21 @@ public import CirclesCrypto
 
 /// Messages of the one-shot sync protocol (docs/DESIGN.md §7.4, §9.2).
 ///
-/// Each side sends, in order: `hello`, then one `want`, then any number of
-/// `identity`/`entries` messages answering the peer's `want`, then `done`.
-/// The session ends when both sides have sent `done`.
+/// Each side sends, in order: `hello`; any `control` messages; `ready`; one
+/// `want`; any number of `identity`/`entries` messages answering the peer's
+/// `want`; then `done`. A side builds its `want` only after the peer's
+/// `ready`, so control messages (such as a pod's configuration) can shape
+/// what it asks for. The session ends when both sides have sent `done`.
 public enum SyncMessage: Sendable, Hashable {
     case hello(Hello)
     case want([Want])
     case identity(SignedObject)
     case entries(author: UserID, entries: [SignedObject])
     case done
+    /// A signed instruction whose meaning depends on its label, e.g. a pod
+    /// configuration from the pod's owner.
+    case control(SignedObject)
+    case ready
 
     public static let protocolVersion: UInt64 = 1
 
@@ -41,6 +47,8 @@ extension SyncMessage: Codable {
         case 2: self = .identity(try container.decode(SignedObject.self))
         case 3: self = .entries(author: try container.decode(UserID.self), entries: try container.decode([SignedObject].self))
         case 4: self = .done
+        case 5: self = .control(try container.decode(SignedObject.self))
+        case 6: self = .ready
         default: throw CBORError.custom("unknown sync message tag \(tag)")
         }
         guard container.isAtEnd else { throw CBORError.custom("trailing fields in sync message") }
@@ -64,6 +72,11 @@ extension SyncMessage: Codable {
             try container.encode(entries)
         case .done:
             try container.encode(UInt64(4))
+        case .control(let object):
+            try container.encode(UInt64(5))
+            try container.encode(object)
+        case .ready:
+            try container.encode(UInt64(6))
         }
     }
 }

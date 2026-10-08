@@ -32,7 +32,7 @@ struct AccountTests {
         }
 
         try await alice.createCircle("Friends")
-        try await alice.addToCircle("Friends", members: [await bob.user])
+        try await alice.addToCircle("Friends", members: [bob.user])
         try await alice.post(RichText(plain: "Hello, world"), to: .everyone)
         try await alice.post(RichText(plain: "Friends only"), to: .circles(["Friends"]))
 
@@ -46,7 +46,7 @@ struct AccountTests {
         #expect(try await bob.stream().first?.authorName == "Alice")
 
         // Removing Bob rotates the key: he keeps the old post but can't read new ones.
-        try await alice.removeFromCircle("Friends", members: [await bob.user])
+        try await alice.removeFromCircle("Friends", members: [bob.user])
         try await alice.post(RichText(plain: "After Bob left"), to: .circles(["Friends"]))
         try await serving(alice) { port in _ = try await bob.sync(host: "127.0.0.1", port: port) }
         #expect(try await bob.stream().map(\.body.plainText) == ["Friends only", "Hello, world"])
@@ -60,7 +60,7 @@ struct AccountTests {
         try await created.createCircle("Family")
         try await created.post(RichText(plain: "kept"), to: .circles(["Family"]))
         let reopened = try Account.open(home: home)
-        #expect(await reopened.user == created.user)
+        #expect(reopened.user == created.user)
         #expect(await reopened.circles.map(\.name) == ["Family"])
         #expect(try await reopened.stream().map(\.body.plainText) == ["kept"])
         #expect(throws: AccountError.alreadyExists) { try Account.create(home: home, displayName: "Dana") }

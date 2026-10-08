@@ -19,10 +19,10 @@ public import CirclesStorage
 /// Private keys never leave the actor. Everything that needs one runs
 /// synchronously inside it.
 public actor Account {
-    public let home: URL
-    public let store: FileLogStore
-    public let user: UserID
-    public let deviceID: DeviceID
+    public nonisolated let home: URL
+    public nonisolated let store: FileLogStore
+    public nonisolated let user: UserID
+    public nonisolated let deviceID: DeviceID
     public private(set) var displayName: String
     public private(set) var identityDocument: SignedObject
     public private(set) var contacts: [Contact] = []
@@ -311,8 +311,9 @@ public actor Account {
                              user: user, device: deviceID)
     }
 
-    /// A sync engine that syncs with contacts and wants their logs. It
-    /// re-reads contacts from disk on each session.
+    /// A sync engine that syncs with contacts and with this user's own other
+    /// devices and pods, and wants their logs. Contacts are re-read from disk
+    /// on each session. Our own pods are sent their configuration.
     public func syncEngine() -> SyncEngine {
         let me = user
         let contactsURL = files.contacts
@@ -323,12 +324,92 @@ public actor Account {
             store: store,
             identityDocument: identityDocument,
             policy: SyncPolicy(
-                isAllowed: { currentContacts().contains($0) },
-                interests: { currentContacts() + [me] }
+                isAllowed: { peer in peer.user == me || currentContacts().contains(peer.user) },
+                interests: { currentContacts() + [me] },
+                outgoingControl: { peer in
+                    guard peer.user == me, peer.device?.capabilities.contains(.storeAndForward) == true,
+                          let config = try? await self.signedPodConfig()
+                    else { return [] }
+                    return [config]
+                }
             ),
             now: { wallClockMillis() }
         )
     }
+
+    /// Signs an arbitrary value with this device, for tests only.
+    func signForTesting(_ value: some Encodable, label: SignatureLabel) throws -> SignedObject {
+        try SignedObject(encoding: value, label: label, with: device)
+    }
+
+    /// The current contact list for our pods, signed by this device.
+    private func signedPodConfig() throws -> SignedObject {
+        try reload()
+        let config = PodConfig(owner: user, version: wallClockMillis(), contacts: contacts.map(\.user))
+        return try SignedObject(encoding: config, label: .podConfig, with: device)
+    }
+
+    // MARK: Endpoints
+
+    public var endpoints: Endpoints {
+        (try? VerifiedIdentity(verifying: identityDocument, for: user).endpoints) ?? Endpoints()
+    }
+
+    /// Publishes a new version of our identity document after `change`.
+    private func republish(_ change: (inout IdentityDocument) throws -> Void) async throws {
+        var document = try VerifiedIdentity(verifying: identityDocument, for: user).document
+        try change(&document)
+        document.version += 1
+        if document.endpoints?.isEmpty == true { document.endpoints = nil }
+        let signed = try document.signed(by: identity)
+        let verified = try VerifiedIdentity(verifying: signed, for: user)
+        identityDocument = signed
+        try files.save(Profile(displayName: displayName, identityDocument: signed), to: files.profile)
+        try await store.saveIdentityDocument(signed, verified: verified)
+    }
+
+    /// Certifies a pod from its pairing code and lists it in our identity
+    /// document. Returns the bundle to give the pod.
+    public func addPod(_ code: PodPairingCode) async throws -> PodBundle {
+        let certificate = try DeviceCertificate.issue(
+            device: code.device, agreementKey: code.agreementKey, by: identity,
+            capabilities: .storeAndForward, issuedMillis: wallClockMillis(), validForMillis: Self.certificateLifetime
+        )
+        try await republish { document in
+            document.certificates.append(certificate)
+            var endpoints = document.endpoints ?? Endpoints()
+            endpoints.pods.removeAll { $0.device == code.device }
+            endpoints.pods.append(PodEndpoint(device: code.device, host: code.host, port: code.port))
+            document.endpoints = endpoints
+        }
+        return PodBundle(identityDocument: identityDocument)
+    }
+
+    /// Lists a relay our devices keep reservations on, so contacts can reach
+    /// us through it.
+    public func addRelay(_ relay: RelayEndpoint) async throws {
+        try await republish { document in
+            var endpoints = document.endpoints ?? Endpoints()
+            endpoints.relays.removeAll { $0.host == relay.host && $0.port == relay.port }
+            endpoints.relays.append(relay)
+            document.endpoints = endpoints
+        }
+    }
+
+    /// Publishes (or with nil, withdraws) this device's public address, e.g.
+    /// from router port mapping. Opt-in: everyone who receives our identity
+    /// document learns it.
+    public func setDirectEndpoint(host: String?, port: Int) async throws {
+        let me = deviceID
+        try await republish { document in
+            var endpoints = document.endpoints ?? Endpoints()
+            endpoints.direct.removeAll { $0.device == me }
+            if let host { endpoints.direct.append(DirectEndpoint(device: me, host: host, port: UInt16(port))) }
+            document.endpoints = endpoints
+        }
+    }
+
+    // MARK: Syncing
 
     /// Connects to a peer and syncs once.
     public func sync(host: String, port: Int) async throws -> SyncReport {
@@ -338,6 +419,104 @@ public actor Account {
         }
         try await absorbKeyGrants()
         return report
+    }
+
+    /// Connects to `target` through a relay and syncs once.
+    public func sync(via relay: RelayEndpoint, to target: AgreementPublicKey) async throws -> SyncReport {
+        let engine = syncEngine()
+        let report = try await withRelayedConnection(
+            via: RelayAddress(host: relay.host, port: Int(relay.port), key: relay.key), to: target,
+            outer: makeHandshake(role: .initiator), inner: makeHandshake(role: .initiator)
+        ) { session in
+            try await engine.run(over: session)
+        }
+        try await absorbKeyGrants()
+        return report
+    }
+
+    /// Keeps a reservation on `relay` and syncs with every peer that connects
+    /// through it, until cancelled or the relay drops us.
+    public func serveViaRelay(
+        _ relay: RelayEndpoint,
+        onReserved: @escaping @Sendable () -> Void = {},
+        onSync: @escaping @Sendable (SyncReport) async -> Void = { _ in }
+    ) async throws {
+        let engine = syncEngine()
+        try await CirclesNet.serveViaRelay(
+            RelayAddress(host: relay.host, port: Int(relay.port), key: relay.key),
+            outer: makeHandshake(role: .initiator), inner: makeHandshake(role: .responder),
+            onReserved: onReserved
+        ) { session in
+            let report = try await engine.run(over: session)
+            try await self.absorbKeyGrants()
+            await onSync(report)
+        }
+    }
+
+    /// One sync attempt, for reporting.
+    public struct SyncAttempt: Sendable {
+        public var route: String
+        public var result: Result<SyncReport, any Error>
+    }
+
+    /// Syncs with everyone reachable, trying routes in order of preference:
+    /// 1. peers found on the local network (mDNS);
+    /// 2. our own pods, always;
+    /// 3. for each contact not yet reached: their pods, then their published
+    ///    direct addresses, then their devices through their relays.
+    public func syncAll(discoveryTimeout: Duration = .seconds(2)) async -> [SyncAttempt] {
+        try? reload()
+        var attempts: [SyncAttempt] = []
+        var reached: Set<UserID> = []
+        let contactUsers = Set(contacts.map(\.user))
+
+        func record(_ attempt: SyncAttempt) -> Bool {
+            attempts.append(attempt)
+            guard case .success(let report) = attempt.result else { return false }
+            if let peer = report.peer { reached.insert(peer) }
+            return true
+        }
+
+        let peers = (try? await MulticastDNS.browse(timeout: discoveryTimeout)) ?? []
+        for peer in peers where peer.device != deviceID {
+            guard let peerUser = peer.user, peerUser == user || contactUsers.contains(peerUser) else { continue }
+            let route = "\(name(of: peerUser)) on the local network (\(peer.host):\(peer.port))"
+            _ = record(await tryRoute(route) { try await self.sync(host: peer.host, port: peer.port) })
+        }
+
+        for pod in endpoints.pods {
+            let route = "my pod at \(pod.host):\(pod.port)"
+            _ = record(await tryRoute(route) { try await self.sync(host: pod.host, port: Int(pod.port)) })
+        }
+
+        for contact in contacts where !reached.contains(contact.user) {
+            guard let identity = try? await store.verifiedIdentity(for: contact.user) else { continue }
+            var done = false
+            for pod in identity.endpoints.pods where !done {
+                let route = "\(contact.name)'s pod at \(pod.host):\(pod.port)"
+                done = record(await tryRoute(route) { try await self.sync(host: pod.host, port: Int(pod.port)) })
+            }
+            for direct in identity.endpoints.direct where !done {
+                let route = "\(contact.name) at \(direct.host):\(direct.port)"
+                done = record(await tryRoute(route) { try await self.sync(host: direct.host, port: Int(direct.port)) })
+            }
+            let devices = identity.certificates.values.filter { $0.capabilities.contains(.author) }
+            for relay in identity.endpoints.relays where !done {
+                for device in devices where !done {
+                    let route = "\(contact.name) via relay \(relay.host):\(relay.port)"
+                    done = record(await tryRoute(route) { try await self.sync(via: relay, to: device.agreementKey) })
+                }
+            }
+        }
+        return attempts
+    }
+
+    private func tryRoute(_ route: String, _ operation: @Sendable () async throws -> SyncReport) async -> SyncAttempt {
+        do {
+            return SyncAttempt(route: route, result: .success(try await operation()))
+        } catch {
+            return SyncAttempt(route: route, result: .failure(error))
+        }
     }
 }
 

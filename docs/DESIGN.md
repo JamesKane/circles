@@ -81,6 +81,17 @@ Every node runs the same codebase. A node's role depends only on configuration a
 - **Relay:** a public node that helps with NAT traversal and short-term store-and-forward. It is untrusted and rate-limited.
 - **Bootstrap node:** a well-known entry point into the DHT. It is untrusted and replaceable.
 
+#### Pods as implemented (M3, `CirclesKit.PodNode`, `circles-pod`)
+
+- **Pairing:**
+  1. `circles-pod init` creates the pod's device keys and prints a pairing code (device ID, X25519 key, host, port).
+  2. The owner runs `circles pod add <code>`. This issues a `.storeAndForward` certificate and publishes a new identity-document version listing the pod in `endpoints.pods`. It prints a bundle (that identity document).
+  3. `circles-pod pair <bundle>` checks that the document certifies this pod.
+- **The pod speaks for its owner.** In sync it presents the owner's identity document. Its Noise key is certified, but only as `.storeAndForward`, so it can't author content or key grants, and it holds no audience keys.
+- **Configuration:** every sync between an owner's author device and its pod carries a signed `PodConfig` (the owner's contact list, versioned) as a control message. The pod accepts configuration only from the owner's `.author` devices. It serves, and keeps logs for, exactly the owner and those contacts.
+- **Privacy cost:** the pod operator learns the owner's contacts' user IDs (not names). That's acceptable for a pod you run yourself; it needs revisiting for shared pods.
+- **Single owner per pod for now.** Multi-user pods need the pod to choose which identity to present per connection. The endpoint record already names the pod device, so that's an additive change.
+
 ## 6. Identity
 
 ### 6.1 Keys
@@ -144,9 +155,31 @@ Re-check `swift-nio-quic` at each milestone boundary.
 ### 7.3 NAT traversal
 
 - Address observation through peers (STUN-like "what's my address" exchange).
-- Coordinated UDP hole punching using a relay as signaling.
+- Coordinated UDP hole punching using a relay as signaling. **Deferred to the QUIC milestone (decided 2026-10-08):** v1 is TCP-only, and TCP simultaneous-open punching has poor success rates. Relays guarantee connectivity meanwhile.
 - Relayed connections as the fallback, end-to-end encrypted so relays only see ciphertext.
 - UPnP-IGD / NAT-PMP / PCP when available.
+
+#### As implemented in M3
+
+- **Relays** (`CirclesNet.RelayServer`, `circles-relay`), similar to libp2p circuit relay v2:
+  - A device opens a control connection, authenticates with its device key over Noise, and sends `reserve`.
+  - A peer opens a data connection and sends `connect(target key)`. The relay sends `incoming(token)` to the reserved device, which opens its own data connection and sends `accept(token)`.
+  - The relay then answers `ok` on both and **forwards frames unchanged**. The two peers run their own Noise XX session end to end, and each checks the other's static key. The relay sees only ciphertext and can't impersonate either side.
+  - The relay authenticates clients only by key: anyone may reserve, but only for a key they hold.
+  - Limits per relay: reservations (1024), circuit duration (10 min) and bytes (64 MiB).
+  - Users list relays in `endpoints.relays` together with the relay's key, so clients pin it. `circles serve` keeps a reservation on each listed relay and reconnects after failures.
+- **Router port mapping** (`CirclesNet.PortMapper`): tries PCP (RFC 6887), then NAT-PMP (RFC 6886), then **UPnP-IGD**.
+  - UPnP was added because the test network's router, like most consumer routers, speaks only UPnP.
+  - Mappings are renewed at half their lifetime and removed on shutdown.
+  - `circles serve --map-port` maps the listening port. `--publish-direct` also lists the public address in `endpoints.direct`. That's opt-in, because it reveals the address to everyone who receives the identity document.
+  - Gateway discovery for NAT-PMP and PCP reads `/proc/net/route` and so is Linux-only for now. UPnP finds the router by multicast, so it works everywhere.
+  - Router quirk seen in testing: some routers store the wildcard remote host as `0.0.0.0` and answer `GetSpecificPortMappingEntry` only in that form (deleting works with the empty string). Lookups try both.
+- **Route order** (`Account.syncAll`):
+  1. peers found by mDNS
+  2. our own pods, always
+  3. for each contact not yet reached: their pods, then their direct endpoints, then each of their author devices through each of their relays
+
+  Verified with separate processes: store-and-forward through a pod while the owner was offline, and data delivered when the only route was a relay.
 
 ### 7.4 Wire protocol
 
@@ -289,7 +322,7 @@ Edits are new objects that supersede earlier ones (`supersedes: CID`). Deletes a
 
 - **Log entry** (signed by the device under `circles/v1/log-entry`): author, device, sequence (1-based), previous entry ID, HLC timestamp, and a body. The body is one of: public content (a signed `ContentItem`); sealed content (an `Envelope` whose plaintext is the `ContentItem`, so even the content *kind* is hidden); or a **key grant**. Entry ID = hash of the signed payload.
 - **Key grants travel in the owner's log** with no recipient hint, and each device finds its own by trial decryption. This keeps delivery asynchronous, so grants reach members through any peer, including relays. The cost: one HPKE attempt per grant per reader, and the number of grants hints at total circle sizes. Revisit when pods exist (a pod could deliver grants directly).
-- **Sync protocol (one-shot, symmetric):** `hello` (identity document) → `want` (for each wanted author: frontier plus known identity-document version) → `identity`/`entries` replies → `done`. Each side answers in a separate task, so large transfers can't deadlock. Each side checks:
+- **Sync protocol (one-shot, symmetric):** `hello` (identity document) → `control`* → `ready` → `want` (for each wanted author: frontier plus known identity-document version) → `identity`/`entries` replies → `done`. Each side builds its `want` only after the peer's `ready`, so control messages such as a pod configuration shape the same session's requests (added in M3). Each side answers in a separate task, so large transfers can't deadlock. Each side checks:
   - that the peer's identity document certifies the **Noise static key it connected with**
   - that the peer is a contact
   - each entry's signature, certificate and position in the hash chain
@@ -525,7 +558,7 @@ The protocol will get an independent review before any "1.0" label.
 | M0 | Skeleton | SwiftPM package, CI on macOS/Linux/Windows, Core types + deterministic CBOR + tests. **In progress (2026-10-08):** package, `CirclesCore` (CBOR, multiformats, `UserID`, `ContentID`, HLC, model types) and 42 tests are done and passing on Linux. The CI workflow is written but not yet run, because the repo has no remote. |
 | M1 | Identity & crypto | Identity/device keys, certificates, envelopes, circle keys, KeyGrant; property tests. **Done (2026-10-08):** `CirclesCrypto` module (see §8.2 "Construction"). 76 tests in total pass on Linux, including seeded property tests for tampering, random audiences, signature bit-flips, and CBOR round-trips. |
 | M2 | Two-peer sync over LAN | mDNS discovery, TCP+Noise sessions, per-author logs, CLI can post and read. **Done (2026-10-08):** `CirclesSync`, `CirclesNet` (Noise XX matching the cacophony test vector, NIO TCP, mDNS), `CirclesStorage`, `CirclesKit`, and the `circles` CLI. 107 tests pass. Verified with two separate processes on Linux: discovery without addresses, sync, circle-restricted reading, removal with key rotation, clean shutdown with mDNS goodbye. |
-| M3 | Pods & relays | Headless pod daemon, store-and-forward, relayed connections, NAT hole punching |
+| M3 | Pods & relays | Headless pod daemon, store-and-forward, relayed connections, ~~NAT hole punching~~ port mapping (hole punching deferred to QUIC). **Done (2026-10-08):** `circles-pod`, `circles-relay`, endpoints in identity documents, sync control messages, PCP/NAT-PMP/UPnP-IGD mapping. 123 tests pass. Verified live with separate processes (pod store-and-forward, relay-only delivery). UPnP-IGD verified live against a real router: it mapped a port, the router listed it, and it was removed (opt-in test, `CIRCLES_LIVE_PORT_MAPPING=1`). |
 | M4 | The Stream | Comments, +1s, reshares, media blobs; `CirclesPresentation` + SwiftUI app on macOS/iOS; main-actor spikes for WinUI and GTK |
 | M5 | Communities | MLS-backed groups, moderation tools |
 | M6 | Platform breadth | Windows (WinUI), Linux (GTK/libadwaita), and Android apps on the shared presentation layer; push relay, DHT |

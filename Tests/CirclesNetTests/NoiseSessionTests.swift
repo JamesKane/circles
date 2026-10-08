@@ -140,7 +140,7 @@ final class Peer: Sendable {
     func engine() -> SyncEngine {
         let contacts = contacts.withLock { $0 }, me = user
         return SyncEngine(store: store, identityDocument: document,
-                          policy: SyncPolicy(isAllowed: { contacts.contains($0) }, interests: { Array(contacts) + [me] }),
+                          policy: SyncPolicy(allowing: { contacts.contains($0) }, interests: { Array(contacts) + [me] }),
                           now: { 2_000 })
     }
 }

@@ -3,7 +3,7 @@
 A reimplementation of the Google+ social model (Circles, the Stream, posts,
 +1s, Communities) on a peer-to-peer backbone, in Swift.
 
-**Status:** early development; milestones M0–M2. Two devices on a local network can discover each other, sync, and read posts restricted to circles. See [docs/DESIGN.md](docs/DESIGN.md).
+**Status:** early development; milestones M0–M3. Devices discover each other on the local network, sync through your own pod while you're offline, and reach each other through relays. See [docs/DESIGN.md](docs/DESIGN.md).
 
 ## Building
 
@@ -37,6 +37,23 @@ CIRCLES_HOME=$B circles sync             # finds Alice on the LAN and syncs
 CIRCLES_HOME=$B circles stream
 ```
 
+### Pods and relays
+
+```sh
+# On an always-on machine:
+circles-pod init --host pod.example.net --port 7465   # prints a pairing code
+circles pod add <pairing code>                         # on your device; prints a bundle
+circles-pod pair <bundle>                              # on the pod
+circles-pod serve
+
+# A relay (anyone can run one; it only sees ciphertext):
+circles-relay --port 7466 --public-host relay.example.net   # prints its address
+circles relay add <relay address>                            # on your device
+
+circles serve --map-port   # also asks your router to forward the port
+circles sync               # local network, pods, then relays
+```
+
 ## Layout
 
 - `Sources/CirclesCore`: identifiers, deterministic CBOR, hybrid logical
@@ -48,7 +65,7 @@ CIRCLES_HOME=$B circles stream
 - `Sources/CirclesNet`: Noise sessions over TCP (SwiftNIO) and mDNS discovery.
 - `Sources/CirclesStorage`: the file-backed log store.
 - `Sources/CirclesKit`: the `Account` façade used by apps and the CLI.
-- `Sources/circles-cli`: the `circles` command.
+- `Sources/circles-cli`, `circles-pod`, `circles-relay`: the command-line tools.
 
 ## License
 

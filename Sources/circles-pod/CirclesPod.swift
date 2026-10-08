@@ -1,0 +1,108 @@
+import ArgumentParser
+import Foundation
+import CirclesCore
+import CirclesSync
+import CirclesCrypto
+import CirclesStorage
+import CirclesNet
+import CirclesKit
+import CirclesCLISupport
+
+@main
+struct CirclesPod: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "circles-pod",
+        abstract: "An always-on node that stores and forwards your encrypted posts and your contacts'.",
+        subcommands: [Init.self, Pair.self, Serve.self, Status.self]
+    )
+}
+
+struct PodGlobal: ParsableArguments {
+    @Option(help: "Data directory. Defaults to $CIRCLES_POD_HOME or ~/.circles-pod.")
+    var home: String?
+
+    var homeURL: URL { directoryURL(home, environment: "CIRCLES_POD_HOME", default: ".circles-pod") }
+
+    func open() throws -> PodNode {
+        do {
+            return try PodNode.open(home: homeURL)
+        } catch AccountError.notFound {
+            throw ValidationError("No pod in \(homeURL.path). Run `circles-pod init` first.")
+        }
+    }
+}
+
+struct Init: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(abstract: "Create the pod's keys and print its pairing code.")
+    @OptionGroup var global: PodGlobal
+    @Option(help: "The host name or address others will reach this pod at.") var host: String
+    @Option(help: "The TCP port the pod will listen on.") var port: UInt16 = 7465
+
+    func run() async throws {
+        let (_, code) = try PodNode.create(home: global.homeURL, host: host, port: port)
+        say("Pod created. On your device, run:")
+        say("  circles pod add \(try code.text)")
+    }
+}
+
+struct Pair: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(abstract: "Accept the bundle printed by `circles pod add`.")
+    @OptionGroup var global: PodGlobal
+    @Argument var bundle: String
+
+    func run() async throws {
+        let owner = try await global.open().pair(try PodBundle(text: bundle))
+        say("Paired with \(owner). Start the pod with `circles-pod serve`, then run `circles sync` on your device.")
+    }
+}
+
+struct Serve: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(abstract: "Serve the owner and their contacts.")
+    @OptionGroup var global: PodGlobal
+    @Flag(help: "Ask the router to forward the port (PCP, NAT-PMP or UPnP-IGD).") var mapPort = false
+
+    func run() async throws {
+        let pod = try global.open()
+        guard let owner = await pod.owner else { throw ValidationError("Not paired yet. Run `circles-pod pair`.") }
+        let mapPort = self.mapPort
+        try await runUntilInterrupted {
+            let listener = try await NoiseListener(port: Int(await pod.port), handshake: await pod.makeHandshake(role: .responder))
+            say("Pod for \(owner) listening on port \(listener.port). Ctrl-C to stop.")
+            try await withThrowingTaskGroup(of: Void.self) { group in
+                group.addTask {
+                    try await listener.run { session in
+                        let report = try await pod.syncEngine().run(over: session)
+                        let peer = report.peer.map { $0 == owner ? "owner" : "contact \(String("\($0)".prefix(20)))…" } ?? "?"
+                        say(describe(report, peerName: peer, direction: "incoming"))
+                    }
+                }
+                if mapPort {
+                    group.addTask {
+                        await PortMapper.keepPortMapped(tcpPort: listener.port, onChange: { mapping in
+                            say(mapping.map { "Port mapped with \($0.method.rawValue): \($0.externalAddress ?? "?"):\($0.externalPort)" }
+                                ?? "Port mapping removed.")
+                        }, onError: { say("Port mapping unavailable: \($0)") })
+                    }
+                }
+                try await group.waitForAll()
+            }
+        }
+    }
+}
+
+struct Status: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(abstract: "Show the pod's owner, address and configuration.")
+    @OptionGroup var global: PodGlobal
+
+    func run() async throws {
+        let pod = try global.open()
+        say("device:   \(pod.deviceID)")
+        say("address:  \(await pod.host):\(await pod.port)")
+        say("owner:    \(await pod.owner.map { "\($0)" } ?? "not paired")")
+        say("contacts: \(await pod.config?.contacts.count ?? 0) (configured by the owner on sync)")
+        for author in await pod.store.authors() {
+            let entries = await pod.store.frontier(author: author).sequences.values.reduce(0, +)
+            say("  \(String("\(author)".prefix(28)))…  \(entries) entries")
+        }
+    }
+}

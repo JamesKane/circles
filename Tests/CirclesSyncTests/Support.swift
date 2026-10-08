@@ -57,7 +57,7 @@ final class Node: @unchecked Sendable {
             store: store,
             identityDocument: document,
             policy: SyncPolicy(
-                isAllowed: { allowed?($0) ?? contacts.contains($0) },
+                allowing: { allowed?($0) ?? contacts.contains($0) },
                 interests: { Array(contacts) + [me] }
             ),
             now: { now }

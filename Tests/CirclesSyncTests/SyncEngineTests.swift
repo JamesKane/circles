@@ -149,3 +149,48 @@ extension SealedKeyGrant {
     }
     private struct Stub: Codable { var encapsulatedKey: [UInt8] = [1]; var ciphertext: [UInt8] = [2] }
 }
+
+@Suite("Control messages")
+struct ControlMessageTests {
+    @Test("a control message shapes the receiver's wants in the same session")
+    func controlBeforeWant() async throws {
+        let owner = try Node(), pod = try Node(), carol = try Node()
+        for node in [owner, pod, carol] { try await node.bootstrap() }
+        try await owner.meet(pod)
+        try await pod.meet(owner)
+        try await owner.meet(carol)
+        try await carol.post("carol's post")
+        try await carol.meet(owner)
+        _ = try await sync(carol, owner)
+
+        // The pod only learns to want Carol's log from the owner's control message.
+        let ownerUser = owner.user, carolUser = carol.user
+        let instruction = try SignedObject(signing: Array("want carol".utf8), label: .podConfig, with: owner.device)
+        let extra = Mutex<[UserID]>([])
+        let ownerEngine = SyncEngine(
+            store: owner.store, identityDocument: owner.document,
+            policy: SyncPolicy(isAllowed: { _ in true }, interests: { [ownerUser, carolUser] },
+                               outgoingControl: { _ in [instruction] }),
+            now: { now }
+        )
+        let podUser = pod.user
+        let podEngine = SyncEngine(
+            store: pod.store, identityDocument: pod.document,
+            policy: SyncPolicy(
+                isAllowed: { _ in true },
+                interests: { [podUser, ownerUser] + extra.withLock { $0 } },
+                handleControl: { control, peer in
+                    _ = try control.verifiedPayload(label: .podConfig, signer: try #require(peer.device).device.publicKey)
+                    extra.withLock { $0.append(carolUser) }
+                }
+            ),
+            now: { now }
+        )
+        let (_, podReport) = try await sync(owner, pod, engines: (ownerEngine, podEngine))
+        #expect(podReport.rejected.isEmpty)
+        #expect(podReport.received[carol.user] == 1)
+        #expect(try await pod.postTexts(by: carol.user) == ["carol's post"])
+    }
+}
+
+import Synchronization

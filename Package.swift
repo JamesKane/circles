@@ -19,6 +19,8 @@ let package = Package(
         .library(name: "CirclesStorage", targets: ["CirclesStorage"]),
         .library(name: "CirclesKit", targets: ["CirclesKit"]),
         .executable(name: "circles", targets: ["circles-cli"]),
+        .executable(name: "circles-pod", targets: ["circles-pod"]),
+        .executable(name: "circles-relay", targets: ["circles-relay"]),
     ],
     dependencies: [
         .package(url: "https://github.com/apple/swift-crypto.git", "4.0.0"..<"6.0.0"),
@@ -60,9 +62,24 @@ let package = Package(
             dependencies: ["CirclesCore", "CirclesCrypto", "CirclesSync", "CirclesNet", "CirclesStorage"],
             swiftSettings: swiftSettings
         ),
+        .target(
+            name: "CirclesCLISupport",
+            dependencies: ["CirclesKit"],
+            swiftSettings: swiftSettings
+        ),
         .executableTarget(
             name: "circles-cli",
-            dependencies: ["CirclesKit", .product(name: "ArgumentParser", package: "swift-argument-parser")],
+            dependencies: ["CirclesKit", "CirclesCLISupport", .product(name: "ArgumentParser", package: "swift-argument-parser")],
+            swiftSettings: swiftSettings
+        ),
+        .executableTarget(
+            name: "circles-pod",
+            dependencies: ["CirclesKit", "CirclesCLISupport", .product(name: "ArgumentParser", package: "swift-argument-parser")],
+            swiftSettings: swiftSettings
+        ),
+        .executableTarget(
+            name: "circles-relay",
+            dependencies: ["CirclesKit", "CirclesCLISupport", .product(name: "ArgumentParser", package: "swift-argument-parser")],
             swiftSettings: swiftSettings
         ),
         .testTarget(

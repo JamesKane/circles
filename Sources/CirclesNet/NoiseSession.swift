@@ -53,6 +53,7 @@ public func withNoiseConnection<Result: Sendable>(
     precondition(handshake.role == .initiator)
     let channel = try await ClientBootstrap(group: group)
         .channelOption(.allowRemoteHalfClosure, value: true)
+        .connectTimeout(.seconds(5))
         .connect(host: host, port: port) { channel in
             channel.eventLoop.makeCompletedFuture { try wrap(channel) }
         }
@@ -117,9 +118,9 @@ public final class NoiseListener: Sendable {
 // MARK: - Internals
 
 /// How long to wait for the peer to close after our side has finished.
-private let lingerTime: Duration = .seconds(5)
+let lingerTime: Duration = .seconds(5)
 
-private func wrap(_ channel: any Channel) throws -> NIOAsyncChannel<ByteBuffer, ByteBuffer> {
+func wrap(_ channel: any Channel) throws -> NIOAsyncChannel<ByteBuffer, ByteBuffer> {
     try channel.pipeline.syncOperations.addHandler(ByteToMessageHandler(NoiseFrameDecoder()))
     return try NIOAsyncChannel<ByteBuffer, ByteBuffer>(
         wrappingChannelSynchronously: channel,
@@ -127,7 +128,7 @@ private func wrap(_ channel: any Channel) throws -> NIOAsyncChannel<ByteBuffer, 
     )
 }
 
-private func runSession<Result: Sendable>(
+func runSession<Result: Sendable>(
     _ channel: NIOAsyncChannel<ByteBuffer, ByteBuffer>,
     handshake: NoiseHandshake,
     timeout: Duration,
@@ -135,59 +136,81 @@ private func runSession<Result: Sendable>(
 ) async throws -> Result {
     try await channel.executeThenClose { inbound, outbound in
         var frames = inbound.makeAsyncIterator()
-        // A peer that stalls mid-handshake gets disconnected, which ends the
-        // read below.
-        let underlying = channel.channel
-        let timer = Task {
-            try await Task.sleep(for: timeout)
-            try? await underlying.close()
-        }
-        var handshake = handshake
-        while !handshake.isComplete {
-            if handshake.isMyTurn {
-                try await outbound.write(framed(try handshake.writeMessage()))
-            } else {
-                guard let frame = try await frames.next() else {
-                    throw timer.isCancelled ? NetError.connectionClosed : NetError.handshakeTimedOut
-                }
-                _ = try handshake.readMessage(Array(buffer: frame))
-            }
-        }
-        timer.cancel()
-        let transport = try handshake.split()
+        let transport = try await performHandshake(handshake, frames: &frames, outbound: outbound,
+                                                   underlying: channel.channel, timeout: timeout)
+        return try await runEstablished(transport, frames: &frames, outbound: outbound,
+                                        underlying: channel.channel, body)
+    }
+}
 
-        let mailbox = Mailbox()
-        let session = NoiseSession(transport: transport, sender: Sender(cipher: transport.send, writer: outbound), mailbox: mailbox)
-        return try await withThrowingTaskGroup(of: Result.self) { group in
-            // The session body runs as a child task. When it finishes, our
-            // side half-closes (pending writes are flushed first), and the
-            // connection is closed outright if the peer doesn't follow
-            // within the linger time.
-            group.addTask {
-                defer {
-                    outbound.finish()
-                    Task {
-                        try await Task.sleep(for: lingerTime)
-                        try? await underlying.close()
-                    }
-                }
-                return try await body(session)
-            }
+typealias Frames = NIOAsyncChannelInboundStream<ByteBuffer>.AsyncIterator
+typealias FrameWriter = NIOAsyncChannelOutboundWriter<ByteBuffer>
 
-            // Decrypt and reassemble incoming messages until the peer closes
-            // or misbehaves.
-            var cipher = transport.receive
-            var reassembler = MessageReassembler()
-            do {
-                while let frame = try await frames.next() {
-                    if let message = try reassembler.add(try cipher.decrypt(Array(buffer: frame))) {
-                        await mailbox.put(message)
-                    }
-                }
-            } catch {}
-            await mailbox.close()
-            return try await group.next()!
+/// Runs a Noise handshake over frames. A peer that stalls is disconnected
+/// after `timeout`, which ends the read.
+func performHandshake(
+    _ handshake: NoiseHandshake,
+    frames: inout Frames,
+    outbound: FrameWriter,
+    underlying: any Channel,
+    timeout: Duration
+) async throws -> NoiseTransport {
+    let timer = Task {
+        try await Task.sleep(for: timeout)
+        try? await underlying.close()
+    }
+    defer { timer.cancel() }
+    var handshake = handshake
+    while !handshake.isComplete {
+        if handshake.isMyTurn {
+            try await outbound.write(framed(try handshake.writeMessage()))
+        } else {
+            guard let frame = try await frames.next() else {
+                throw timer.isCancelled ? NetError.connectionClosed : NetError.handshakeTimedOut
+            }
+            _ = try handshake.readMessage(Array(buffer: frame))
         }
+    }
+    return try handshake.split()
+}
+
+/// Runs `body` over an established session. The body runs as a child task;
+/// the read loop stays in this task, which owns the frame iterator. When the
+/// body finishes, our side half-closes (pending writes are flushed first),
+/// and the connection is closed outright if the peer doesn't follow within
+/// the linger time.
+func runEstablished<Result: Sendable>(
+    _ transport: NoiseTransport,
+    frames: inout Frames,
+    outbound: FrameWriter,
+    underlying: any Channel,
+    _ body: @escaping @Sendable (NoiseSession) async throws -> Result
+) async throws -> Result {
+    let mailbox = Mailbox()
+    let session = NoiseSession(transport: transport, sender: Sender(cipher: transport.send, writer: outbound), mailbox: mailbox)
+    return try await withThrowingTaskGroup(of: Result.self) { group in
+        group.addTask {
+            defer {
+                outbound.finish()
+                Task {
+                    try await Task.sleep(for: lingerTime)
+                    try? await underlying.close()
+                }
+            }
+            return try await body(session)
+        }
+
+        var cipher = transport.receive
+        var reassembler = MessageReassembler()
+        do {
+            while let frame = try await frames.next() {
+                if let message = try reassembler.add(try cipher.decrypt(Array(buffer: frame))) {
+                    await mailbox.put(message)
+                }
+            }
+        } catch {}
+        await mailbox.close()
+        return try await group.next()!
     }
 }
 

@@ -1,16 +1,43 @@
 public import CirclesCore
 public import CirclesCrypto
 
+/// The authenticated peer of a session.
+public struct PeerInfo: Sendable {
+    public let user: UserID
+    public let identity: VerifiedIdentity
+    /// The certified device that connected, when the transport authenticated
+    /// a static key (always, over Noise).
+    public let device: DeviceCertificate?
+}
+
 /// Who a node will sync with and whose logs it wants.
 public struct SyncPolicy: Sendable {
     /// Whether to sync with an authenticated peer at all.
-    public var isAllowed: @Sendable (UserID) async -> Bool
+    public var isAllowed: @Sendable (PeerInfo) async -> Bool
     /// The authors whose logs this node wants, normally itself plus contacts.
+    /// Asked after the peer's control messages have been handled.
     public var interests: @Sendable () async -> [UserID]
+    /// Control messages to send this peer before `ready`.
+    public var outgoingControl: @Sendable (PeerInfo) async -> [SignedObject]
+    /// Handles a control message from the peer. Throwing records a rejection
+    /// but doesn't end the session.
+    public var handleControl: @Sendable (SignedObject, PeerInfo) async throws -> Void
 
-    public init(isAllowed: @escaping @Sendable (UserID) async -> Bool, interests: @escaping @Sendable () async -> [UserID]) {
+    public init(
+        isAllowed: @escaping @Sendable (PeerInfo) async -> Bool,
+        interests: @escaping @Sendable () async -> [UserID],
+        outgoingControl: @escaping @Sendable (PeerInfo) async -> [SignedObject] = { _ in [] },
+        handleControl: @escaping @Sendable (SignedObject, PeerInfo) async throws -> Void = { _, _ in }
+    ) {
         self.isAllowed = isAllowed
         self.interests = interests
+        self.outgoingControl = outgoingControl
+        self.handleControl = handleControl
+    }
+
+    /// Allows peers by user ID only.
+    public init(allowing isAllowed: @escaping @Sendable (UserID) async -> Bool, interests: @escaping @Sendable () async -> [UserID]) {
+        self.init(isAllowed: { await isAllowed($0.user) }, interests: interests)
     }
 }
 
@@ -53,7 +80,27 @@ public struct SyncEngine: Sendable {
             throw SyncError.protocolViolation("expected hello")
         }
         let peer = try await authenticate(hello, staticKey: channel.remoteStaticKey)
-        report.peer = peer
+        report.peer = peer.user
+
+        for control in await policy.outgoingControl(peer) {
+            try await send(.control(control), on: channel)
+        }
+        try await send(.ready, on: channel)
+        readying: while true {
+            guard let bytes = try await channel.receive() else { throw SyncError.connectionClosed }
+            switch try decodeMessage(bytes) {
+            case .control(let control):
+                do {
+                    try await policy.handleControl(control, peer)
+                } catch {
+                    report.rejected.append("control message: \(error)")
+                }
+            case .ready:
+                break readying
+            default:
+                throw SyncError.protocolViolation("expected control or ready")
+            }
+        }
 
         let interests = Set(await policy.interests())
         try await send(.want(try await wants(for: interests)), on: channel)
@@ -79,8 +126,8 @@ public struct SyncEngine: Sendable {
                     throw SyncError.connectionClosed
                 }
                 switch try decodeMessage(bytes) {
-                case .hello:
-                    throw SyncError.protocolViolation("duplicate hello")
+                case .hello, .control, .ready:
+                    throw SyncError.protocolViolation("hello, control or ready after want")
                 case .want(let wants):
                     guard !receivedWant else { throw SyncError.protocolViolation("duplicate want") }
                     receivedWant = true
@@ -126,7 +173,7 @@ public struct SyncEngine: Sendable {
 
     /// Checks the peer's identity document, that it certifies the key the
     /// peer connected with, and that policy allows the peer.
-    private func authenticate(_ hello: SyncMessage.Hello, staticKey: AgreementPublicKey?) async throws -> UserID {
+    private func authenticate(_ hello: SyncMessage.Hello, staticKey: AgreementPublicKey?) async throws -> PeerInfo {
         guard hello.version == SyncMessage.protocolVersion else {
             throw SyncError.unsupportedProtocolVersion(hello.version)
         }
@@ -142,17 +189,15 @@ public struct SyncEngine: Sendable {
         } catch {
             throw SyncError.verificationFailed(error)
         }
+        var device: DeviceCertificate?
         if let staticKey {
-            let time = now()
-            let certified = verified.certificates.values.contains { certificate in
-                certificate.agreementKey == staticKey
-                    && (try? verified.certificate(for: certificate.device, atMillis: time, requiring: [])) != nil
-            }
-            guard certified else { throw SyncError.peerNotAuthenticated }
+            device = verified.device(withAgreementKey: staticKey, atMillis: now())
+            guard device != nil else { throw SyncError.peerNotAuthenticated }
         }
-        guard await policy.isAllowed(verified.user) else { throw SyncError.peerNotAllowed(verified.user) }
+        let peer = PeerInfo(user: verified.user, identity: verified, device: device)
+        guard await policy.isAllowed(peer) else { throw SyncError.peerNotAllowed(verified.user) }
         try await store.saveIdentityDocument(hello.identity, verified: verified)
-        return verified.user
+        return peer
     }
 
     private func wants(for authors: Set<UserID>) async throws -> [SyncMessage.Want] {
