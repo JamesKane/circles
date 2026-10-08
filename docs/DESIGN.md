@@ -657,7 +657,7 @@ Screen models are `@MainActor`. On Apple platforms, the main actor already runs 
 | **Malicious push relay** | Learn activity, spam wake-ups | Content-free pings; handles are random and given only to the owner's pods; pings coalesced; no answer reveals whether a handle exists | Learns device tokens and which pod IPs ping when |
 | **Malicious contact** | Leak content; exhaust resources | Nothing prevents leaking what one is shown. Resources: 16 MiB messages, batched sync, ≤1024 blobs per session, **≤256 wraps per envelope** (trial decryption stays cheap) | Can still fill our disk with signed entries in their own log (bounded only by what we keep); key-grant spam costs one HPKE trial per entry |
 | **Malicious community member** | Disrupt the community; impersonate | Submissions are verified against the member's own signature before republishing; the owner removes members and items; MLS removal locks a member out of what follows; **join requests expire after an hour** (no replay) | One sequencer: the owner is a single point of control and availability; no moderator roles yet |
-| **Stolen device** | Post as the user | Revocation in the identity document; verifiers reject the device's signatures at or after the revocation time | Verification uses the timestamp an entry *claims*, so a revoked device can still backdate new entries to before its revocation. Needs "first seen" times recorded by readers |
+| **Stolen device** | Post as the user, including backdated posts | Revocation in the identity document (`circles device revoke`): the device's signatures at or after the revocation time are rejected, and so is **anything in its log past the last entry the revoking device had seen**, whatever time it claims. Readers drop such entries already stored as soon as they learn of the revocation. **Peers are authenticated against the newest identity document we know**, so a revoked device can't get in by presenting an old one | Entries the stolen device wrote before the user noticed, and which the user's other devices had already seen, still stand. Signed objects outside logs fall back to the claimed time |
 | **Anyone reaching a listener** | Exhaust connections, hold sessions, burn CPU on handshakes | **≤512 connections, ≤32 per IP, a per-IP token bucket (10/s, bursts of 40), refused before the handshake; sessions closed after 2 minutes idle**; 10 s handshake timeout | Distributed sources (botnets) aren't limited per IP |
 | **Malformed input anywhere** | Crash or hang a parser | Strict deterministic CBOR (depth limit, lengths checked before allocation, canonical-only); every parser and handler fuzzed (§12.2) | swift-mls is pre-release; it survived fuzzing here but hasn't had an audit |
 
@@ -701,7 +701,6 @@ In the attack rows, attackers join normally, then answer every lookup with the a
 
 - Metadata (§8.4): IPs and timing, the pod learning rosters, cover traffic.
 - Cheap Sybils: proof-of-work or stake-weighted node IDs; preferring long-lived contacts already helps.
-- Backdated entries from revoked devices ("first seen" times).
 - Spam on first contact: postage tokens, contact-of-contact allowances, and user-level allowlists.
 - Per-contact storage quotas.
 

@@ -276,12 +276,18 @@ public struct SyncEngine: Sendable {
         } catch {
             throw SyncError.verificationFailed(error)
         }
+        // A peer could present an old document that predates a revocation;
+        // judge it by the newest version we know.
+        var current = verified
+        if let stored = try await store.verifiedIdentity(for: claimed.user), stored.version > verified.version {
+            current = stored
+        }
         var device: DeviceCertificate?
         if let staticKey {
-            device = verified.device(withAgreementKey: staticKey, atMillis: now())
+            device = current.device(withAgreementKey: staticKey, atMillis: now())
             guard device != nil else { throw SyncError.peerNotAuthenticated }
         }
-        let peer = PeerInfo(user: verified.user, identity: verified, device: device)
+        let peer = PeerInfo(user: current.user, identity: current, device: device)
         guard await policy.isAllowed(peer) else { throw SyncError.peerNotAllowed(verified.user) }
         try await store.saveIdentityDocument(hello.identity, verified: verified)
         return peer

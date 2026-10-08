@@ -366,7 +366,7 @@ public actor Account {
     }
 
     /// Publishes a new version of our identity document after `change`.
-    private func republish(_ change: (inout IdentityDocument) throws -> Void) async throws {
+    func republish(_ change: (inout IdentityDocument) throws -> Void) async throws {
         var document = try VerifiedIdentity(verifying: identityDocument, for: user).document
         try change(&document)
         document.version += 1

@@ -109,6 +109,12 @@ public actor SQLiteLogStore: LogStore {
             ON CONFLICT (user) DO UPDATE SET version = excluded.version, document = excluded.document
             WHERE excluded.version > identities.version
             """, [.blob(verified.user.multicodecBytes), .integer(Int64(verified.version)), .blob(try CBOREncoder().encode(document))])
+        // Drop entries past a revoked device's last standing one (received
+        // before we learned of the revocation).
+        for (device, last) in verified.lastSequences {
+            try db.query("DELETE FROM entries WHERE author = ? AND device = ? AND seq > ?",
+                         [.blob(verified.user.multicodecBytes), .blob(device.multicodecBytes), .integer(Int64(min(last, UInt64(Int64.max))))])
+        }
     }
 
     // MARK: Blobs

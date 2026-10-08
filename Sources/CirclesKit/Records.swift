@@ -168,6 +168,8 @@ public enum AccountError: Error, Sendable, Equatable {
     case commentsDisabled
     case notYours
     case notFoundInDHT
+    case cannotRevokeThisDevice
+    case unknownDevice
 }
 
 import Foundation
