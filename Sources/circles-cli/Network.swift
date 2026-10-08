@@ -21,7 +21,7 @@ struct Serve: AsyncParsableCommand {
     @Flag(help: "Don't advertise on the local network (mDNS).") var noAdvertise = false
 
     func run() async throws {
-        let account = try global.open()
+        let account = try await global.open()
         let (port, interval, mapPort, publishDirect, advertise) = (self.port, self.interval, self.mapPort, self.publishDirect, !self.noAdvertise)
         try await runUntilInterrupted {
             let listener = try await NoiseListener(port: port, handshake: await account.makeHandshake(role: .responder))
@@ -100,7 +100,7 @@ struct SyncCommand: AsyncParsableCommand {
     @Option(help: "Sync only with host:port.") var peer: String?
 
     func run() async throws {
-        let account = try global.open()
+        let account = try await global.open()
         if let peer {
             guard let colon = peer.lastIndex(of: ":"), let port = Int(peer[peer.index(after: colon)...]) else {
                 throw ValidationError("--peer must be host:port")
@@ -148,7 +148,7 @@ struct PodCommand: AsyncParsableCommand {
         @OptionGroup var global: Global
 
         func run() async throws {
-            for pod in await (try global.open()).endpoints.pods {
+            for pod in await (try await global.open()).endpoints.pods {
                 say("\(pod.host):\(pod.port)\t\(pod.device)")
             }
         }
@@ -176,7 +176,7 @@ struct RelayCommand: AsyncParsableCommand {
         @OptionGroup var global: Global
 
         func run() async throws {
-            for relay in await (try global.open()).endpoints.relays {
+            for relay in await (try await global.open()).endpoints.relays {
                 say("\(relay.host):\(relay.port)")
             }
         }

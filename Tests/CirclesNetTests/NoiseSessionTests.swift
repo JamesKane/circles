@@ -51,8 +51,12 @@ struct NoiseSessionTests {
         let holder = Task {
             try await silent.executeThenClose { connections in
                 for try await connection in connections {
-                    _ = connection // keep it open
-                    try await Task.sleep(for: .seconds(30))
+                    // Hold the connection open without answering. (It must go
+                    // through executeThenClose: NIO traps if an accepted
+                    // NIOAsyncChannel is dropped unused.)
+                    try await connection.executeThenClose { _, _ in
+                        try await Task.sleep(for: .seconds(30))
+                    }
                 }
             }
         }

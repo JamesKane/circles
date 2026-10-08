@@ -14,13 +14,13 @@ public import CirclesStorage
 ///     <home>/account/circles.cbor    circles with current keys (0600)
 ///     <home>/account/keyring.cbor    all audience keys held (0600)
 ///     <home>/account/clock.cbor      hybrid logical clock
-///     <home>/logs, <home>/identities (FileLogStore)
+///     <home>/circles.sqlite          logs, identity documents, media chunks
 ///
 /// Private keys never leave the actor. Everything that needs one runs
 /// synchronously inside it.
 public actor Account {
     public nonisolated let home: URL
-    public nonisolated let store: FileLogStore
+    public nonisolated let store: SQLiteLogStore
     public nonisolated let user: UserID
     public nonisolated let deviceID: DeviceID
     public private(set) var displayName: String
@@ -28,9 +28,9 @@ public actor Account {
     public private(set) var contacts: [Contact] = []
     public private(set) var circles: [CircleRecord] = []
 
-    private let identity: IdentityKeyPair
-    private let device: DeviceKeyPair
-    private var keyring = AudienceKeyring()
+    let identity: IdentityKeyPair
+    let device: DeviceKeyPair
+    var keyring = AudienceKeyring()
     private var clock = HybridLogicalClock()
 
     public static let certificateLifetime: UInt64 = 365 * 24 * 3600 * 1000
@@ -38,7 +38,7 @@ public actor Account {
     // MARK: Lifecycle
 
     /// Creates a new identity and device in `home`.
-    public static func create(home: URL, displayName: String) throws -> Account {
+    public static func create(home: URL, displayName: String) async throws -> Account {
         let files = Files(home: home)
         guard !FileManager.default.fileExists(atPath: files.keys.path) else { throw AccountError.alreadyExists }
         let identity = IdentityKeyPair()
@@ -47,31 +47,34 @@ public actor Account {
             for: device, by: identity, capabilities: .author,
             issuedMillis: wallClockMillis(), validForMillis: certificateLifetime
         )
-        let document = try IdentityDocument(user: identity.userID, version: 1, certificates: [certificate]).signed(by: identity)
+        let document = try IdentityDocument(user: identity.userID, version: 1, certificates: [certificate],
+                                            displayName: displayName).signed(by: identity)
         let deviceRaw = device.exportRawRepresentation()
         try files.save(StoredKeys(identity: identity.exportRawRepresentation(),
                                   deviceSigning: deviceRaw.signingKey, deviceAgreement: deviceRaw.agreementKey),
                        to: files.keys, private: true)
         try files.save(Profile(displayName: displayName, identityDocument: document), to: files.profile)
-        return try open(home: home)
+        return try await open(home: home)
     }
 
-    public static func open(home: URL) throws -> Account {
+    public static func open(home: URL) async throws -> Account {
         let files = Files(home: home)
         guard let keys = try files.load(StoredKeys.self, from: files.keys),
               let profile = try files.load(Profile.self, from: files.profile)
         else { throw AccountError.notFound }
+        let store = try await openStore(home: home)
         return try Account(
             home: home,
+            store: store,
             identity: IdentityKeyPair(rawRepresentation: keys.identity),
             device: DeviceKeyPair(signingKey: keys.deviceSigning, agreementKey: keys.deviceAgreement),
             profile: profile
         )
     }
 
-    private init(home: URL, identity: consuming IdentityKeyPair, device: consuming DeviceKeyPair, profile: Profile) throws {
+    private init(home: URL, store: SQLiteLogStore, identity: consuming IdentityKeyPair, device: consuming DeviceKeyPair, profile: Profile) throws {
         self.home = home
-        store = FileLogStore(root: home)
+        self.store = store
         user = identity.userID
         deviceID = device.deviceID
         displayName = profile.displayName
@@ -82,7 +85,7 @@ public actor Account {
         self.device = device
     }
 
-    private var files: Files { Files(home: home) }
+    var files: Files { Files(home: home) }
 
     /// Re-reads contacts, circles, keyring and clock, which another process
     /// sharing this home may have changed.
@@ -108,12 +111,12 @@ public actor Account {
         )
     }
 
-    private func saveKeyring() throws {
+    func saveKeyring() throws {
         let stored = keyring.allKeys.map { StoredKey(owner: $0.owner, key: $0.key) }
         try files.save(stored, to: files.keyring, private: true)
     }
 
-    private func tick() throws -> HLCTimestamp {
+    func tick() throws -> HLCTimestamp {
         let timestamp = clock.now(physicalMillis: wallClockMillis())
         try files.save(timestamp, to: files.clock)
         return timestamp
@@ -200,37 +203,13 @@ public actor Account {
         try files.save(circles, to: files.circles, private: true)
     }
 
-    // MARK: Posting
+    // MARK: Logging
 
-    @discardableResult
-    public func post(_ body: RichText, to audience: PostAudience) async throws -> ContentID {
-        try reload()
-        let created = try tick()
-        let post = Post(author: user, created: created, body: body)
-        let item = ContentItem(kind: .post, object: try SignedObject(encoding: post, label: .post, with: device))
-        switch audience {
-        case .everyone:
-            try await appendToLog(.publicContent(item), created: created)
-        case .circles(let names):
-            guard !names.isEmpty else { throw AccountError.emptyAudience }
-            let keys = try names.map { name in
-                guard let circle = circles.first(where: { $0.name.caseInsensitiveCompare(name) == .orderedSame }) else {
-                    throw AccountError.unknownCircle(name)
-                }
-                return try circle.current.audienceKey
-            }
-            let envelope = try Envelope.seal(try CBOREncoder().encode(item), author: user,
-                                             to: EnvelopeAudience(audienceKeys: keys))
-            try await appendToLog(.sealedContent(envelope), created: created)
-        }
-        return item.object.contentID
-    }
-
-    private func appendToLog(_ body: LogBody, created: HLCTimestamp? = nil) async throws {
+    func appendToLog(_ body: LogBody, created: HLCTimestamp? = nil, blobs: [ContentID]? = nil) async throws {
         let created = try created ?? tick()
         let head = try await store.head(author: user, device: deviceID)
         let entry = LogEntry(author: user, device: deviceID, sequence: (head?.sequence ?? 0) + 1,
-                             previous: head?.id, created: created, body: body)
+                             previous: head?.id, created: created, body: body, blobs: blobs)
         try await store.append(try VerifiedLogEntry(signing: entry, with: device))
     }
 
@@ -259,42 +238,8 @@ public actor Account {
         return learned
     }
 
-    /// Every post this user can read, newest first, decrypted and verified.
-    public func stream() async throws -> [StreamItem] {
-        try await absorbKeyGrants()
-        var items: [StreamItem] = []
-        for author in [user] + contacts.map(\.user) {
-            guard let identity = try await verifiedIdentity(for: author) else { continue }
-            for signed in try await store.allEntries(author: author) {
-                guard let entry = try? CBORDecoder().decode(LogEntry.self, from: signed.payload) else { continue }
-                let item: ContentItem
-                let audience: StreamItem.Audience
-                switch entry.body {
-                case .publicContent(let content):
-                    (item, audience) = (content, .everyone)
-                case .sealedContent(let envelope):
-                    guard let plaintext = try? envelope.open(keyring: keyring, device: device),
-                          let content = try? CBORDecoder().decode(ContentItem.self, from: plaintext)
-                    else { continue }
-                    (item, audience) = (content, .limited)
-                case .keyGrant:
-                    continue
-                }
-                guard item.kind == .post,
-                      let claimed = try? CBORDecoder().decode(Post.self, from: item.object.payload),
-                      claimed.author == author,
-                      let payload = try? identity.verify(item.object, label: .post, atMillis: claimed.created.millis),
-                      let post = try? CBORDecoder().decode(Post.self, from: payload)
-                else { continue }
-                items.append(StreamItem(id: item.object.contentID, author: author, authorName: name(of: author),
-                                        created: post.created, body: post.body, audience: audience))
-            }
-        }
-        return items.sorted { $0.created > $1.created }
-    }
-
     /// Our own identity comes from the profile; others' from the store.
-    private func verifiedIdentity(for author: UserID) async throws -> VerifiedIdentity? {
+    func verifiedIdentity(for author: UserID) async throws -> VerifiedIdentity? {
         author == user
             ? try VerifiedIdentity(verifying: identityDocument, for: user)
             : try await store.verifiedIdentity(for: author)
@@ -522,6 +467,21 @@ public actor Account {
 
 // MARK: - Files
 
+/// Opens `<home>/circles.sqlite`, first importing an M2/M3 file-based store
+/// if one is present. The old directories are renamed, not deleted.
+func openStore(home: URL) async throws -> SQLiteLogStore {
+    let store = try SQLiteLogStore(path: home.appendingPathComponent("circles.sqlite"))
+    let logs = home.appendingPathComponent("logs"), identities = home.appendingPathComponent("identities")
+    let fileManager = FileManager.default
+    if fileManager.fileExists(atPath: logs.path) || fileManager.fileExists(atPath: identities.path) {
+        _ = try await store.importLegacyFiles(from: home)
+        for directory in [logs, identities] where fileManager.fileExists(atPath: directory.path) {
+            try fileManager.moveItem(at: directory, to: directory.appendingPathExtension("pre-m4"))
+        }
+    }
+    return store
+}
+
 struct Files {
     let home: URL
 
@@ -532,6 +492,8 @@ struct Files {
     var circles: URL { account.appendingPathComponent("circles.cbor") }
     var keyring: URL { account.appendingPathComponent("keyring.cbor") }
     var clock: URL { account.appendingPathComponent("clock.cbor") }
+    /// IDs of contributions already republished into our threads.
+    var threads: URL { account.appendingPathComponent("threads.cbor") }
 
     func save(_ value: some Encodable, to url: URL, private isPrivate: Bool = false) throws {
         try FileIO.write(try CBOREncoder().encode(value), to: url, private: isPrivate)

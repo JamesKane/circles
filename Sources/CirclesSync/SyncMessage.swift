@@ -5,9 +5,12 @@ public import CirclesCrypto
 ///
 /// Each side sends, in order: `hello`; any `control` messages; `ready`; one
 /// `want`; any number of `identity`/`entries` messages answering the peer's
-/// `want`; then `done`. A side builds its `want` only after the peer's
-/// `ready`, so control messages (such as a pod's configuration) can shape
-/// what it asks for. The session ends when both sides have sent `done`.
+/// `want`; `entriesDone`; one `wantBlobs` (sent once the peer's
+/// `entriesDone` arrives, listing media chunks it still needs); `blob`
+/// messages answering the peer's `wantBlobs`; then `done`. A side builds its
+/// `want` only after the peer's `ready`, so control messages (such as a pod's
+/// configuration) can shape what it asks for. The session ends when both
+/// sides have sent `done`.
 public enum SyncMessage: Sendable, Hashable {
     case hello(Hello)
     case want([Want])
@@ -18,6 +21,9 @@ public enum SyncMessage: Sendable, Hashable {
     /// configuration from the pod's owner.
     case control(SignedObject)
     case ready
+    case entriesDone
+    case wantBlobs([ContentID])
+    case blob(ContentID, [UInt8])
 
     public static let protocolVersion: UInt64 = 1
 
@@ -49,6 +55,9 @@ extension SyncMessage: Codable {
         case 4: self = .done
         case 5: self = .control(try container.decode(SignedObject.self))
         case 6: self = .ready
+        case 7: self = .entriesDone
+        case 8: self = .wantBlobs(try container.decode([ContentID].self))
+        case 9: self = .blob(try container.decode(ContentID.self), try container.decode([UInt8].self))
         default: throw CBORError.custom("unknown sync message tag \(tag)")
         }
         guard container.isAtEnd else { throw CBORError.custom("trailing fields in sync message") }
@@ -77,6 +86,15 @@ extension SyncMessage: Codable {
             try container.encode(object)
         case .ready:
             try container.encode(UInt64(6))
+        case .entriesDone:
+            try container.encode(UInt64(7))
+        case .wantBlobs(let ids):
+            try container.encode(UInt64(8))
+            try container.encode(ids)
+        case .blob(let id, let bytes):
+            try container.encode(UInt64(9))
+            try container.encode(id)
+            try container.encode(bytes)
         }
     }
 }

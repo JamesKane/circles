@@ -24,9 +24,9 @@ func serving<R>(_ account: Account, _ body: (Int) async throws -> R) async throw
 struct AccountTests {
     @Test("circles control who reads what, over real TCP")
     func circlesEndToEnd() async throws {
-        let alice = try Account.create(home: temporaryHome(), displayName: "Alice")
-        let bob = try Account.create(home: temporaryHome(), displayName: "Bob")
-        let carol = try Account.create(home: temporaryHome(), displayName: "Carol")
+        let alice = try await Account.create(home: temporaryHome(), displayName: "Alice")
+        let bob = try await Account.create(home: temporaryHome(), displayName: "Bob")
+        let carol = try await Account.create(home: temporaryHome(), displayName: "Carol")
         for (a, b) in [(alice, bob), (bob, alice), (alice, carol), (carol, alice)] {
             try await a.addContact(invite: await b.invite())
         }
@@ -56,19 +56,19 @@ struct AccountTests {
     @Test("an account survives being reopened")
     func reopen() async throws {
         let home = temporaryHome()
-        let created = try Account.create(home: home, displayName: "Dana")
+        let created = try await Account.create(home: home, displayName: "Dana")
         try await created.createCircle("Family")
         try await created.post(RichText(plain: "kept"), to: .circles(["Family"]))
-        let reopened = try Account.open(home: home)
+        let reopened = try await Account.open(home: home)
         #expect(reopened.user == created.user)
         #expect(await reopened.circles.map(\.name) == ["Family"])
         #expect(try await reopened.stream().map(\.body.plainText) == ["kept"])
-        #expect(throws: AccountError.alreadyExists) { try Account.create(home: home, displayName: "Dana") }
+        await #expect(throws: AccountError.alreadyExists) { try await Account.create(home: home, displayName: "Dana") }
     }
 
     @Test("invites round-trip and reject garbage")
     func invites() async throws {
-        let alice = try Account.create(home: temporaryHome(), displayName: "Alice")
+        let alice = try await Account.create(home: temporaryHome(), displayName: "Alice")
         let invite = try Invite(text: await alice.invite())
         #expect(invite.name == "Alice")
         #expect(throws: AccountError.invalidInvite) { try Invite(text: "circles-invite:!!") }
@@ -76,44 +76,14 @@ struct AccountTests {
 
     @Test("a contact can't be confused with a non-contact")
     func strangersAreRefused() async throws {
-        let alice = try Account.create(home: temporaryHome(), displayName: "Alice")
-        let mallory = try Account.create(home: temporaryHome(), displayName: "Mallory")
+        let alice = try await Account.create(home: temporaryHome(), displayName: "Alice")
+        let mallory = try await Account.create(home: temporaryHome(), displayName: "Mallory")
         try await mallory.addContact(invite: await alice.invite()) // one-sided
         try await alice.post(RichText(plain: "not for strangers"), to: .everyone)
         await #expect(throws: (any Error).self) {
             try await serving(alice) { port in _ = try await mallory.sync(host: "127.0.0.1", port: port) }
         }
         #expect(try await mallory.stream().isEmpty)
-    }
-}
-
-@Suite("File log store")
-struct FileLogStoreTests {
-    @Test("appends must follow the head, and survive a new store instance")
-    func appendAndReopen() async throws {
-        let root = temporaryHome()
-        let device = DeviceKeyPair()
-        let author = try UserID(ed25519PublicKey: [UInt8](repeating: 1, count: 32))
-        let store = FileLogStore(root: root)
-        let first = try await store.appendLocal(.keyGrant(.stub), author: author, device: device, created: HLCTimestamp(millis: 1))
-        try await store.appendLocal(.keyGrant(.stub), author: author, device: device, created: HLCTimestamp(millis: 2))
-
-        // Re-appending entry 1 is refused.
-        await #expect(throws: LogStoreError.notNextInSequence) { try await store.append(first) }
-
-        let reopened = FileLogStore(root: root)
-        #expect(await reopened.frontier(author: author)[device.deviceID] == 2)
-        #expect(try await reopened.entries(author: author, device: device.deviceID, after: 0, limit: 10).count == 2)
-        #expect(try await reopened.entries(author: author, device: device.deviceID, after: 1, limit: 10).first?.contentID != first.id)
-        #expect(await reopened.authors() == [author])
-    }
-
-    @Test("exclusive creation refuses to overwrite")
-    func exclusive() throws {
-        let url = temporaryHome().appendingPathComponent("x.cbor")
-        #expect(try FileIO.createExclusively([1], at: url))
-        #expect(try FileIO.createExclusively([2], at: url) == false)
-        #expect(try FileIO.read(url) == [1])
     }
 }
 

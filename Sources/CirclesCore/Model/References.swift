@@ -9,17 +9,29 @@ public struct ObjectRef: Sendable, Hashable, Codable {
     }
 }
 
-/// A reference to a media blob (docs/DESIGN.md §9.3).
+/// A media attachment (docs/DESIGN.md §9.3): encrypted chunks, plus the key
+/// to decrypt them. The reference lives inside the (encrypted) post, so only
+/// the post's audience learns the key.
 public struct BlobRef: Sendable, Hashable, Codable {
-    public var id: ContentID
+    /// IDs of the encrypted chunks, in order.
+    public var chunks: [ContentID]
+    /// The 32-byte media key the chunks are encrypted under.
+    public var key: [UInt8]
+    /// SHA-256 of the plaintext, checked after decryption.
+    public var digest: ContentID
     public var byteCount: UInt64
     /// An IANA media type, e.g. `image/jpeg`.
     public var mediaType: String
     public var width: UInt32?
     public var height: UInt32?
 
-    public init(id: ContentID, byteCount: UInt64, mediaType: String, width: UInt32? = nil, height: UInt32? = nil) {
-        self.id = id
+    public init(
+        chunks: [ContentID], key: [UInt8], digest: ContentID, byteCount: UInt64,
+        mediaType: String, width: UInt32? = nil, height: UInt32? = nil
+    ) {
+        self.chunks = chunks
+        self.key = key
+        self.digest = digest
         self.byteCount = byteCount
         self.mediaType = mediaType
         self.width = width

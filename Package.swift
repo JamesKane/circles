@@ -18,6 +18,7 @@ let package = Package(
         .library(name: "CirclesNet", targets: ["CirclesNet"]),
         .library(name: "CirclesStorage", targets: ["CirclesStorage"]),
         .library(name: "CirclesKit", targets: ["CirclesKit"]),
+        .library(name: "CirclesPresentation", targets: ["CirclesPresentation"]),
         .executable(name: "circles", targets: ["circles-cli"]),
         .executable(name: "circles-pod", targets: ["circles-pod"]),
         .executable(name: "circles-relay", targets: ["circles-relay"]),
@@ -52,14 +53,24 @@ let package = Package(
             ],
             swiftSettings: swiftSettings
         ),
+        .systemLibrary(
+            name: "CSQLite",
+            pkgConfig: "sqlite3",
+            providers: [.apt(["libsqlite3-dev"]), .yum(["sqlite-devel"]), .brew(["sqlite"])]
+        ),
         .target(
             name: "CirclesStorage",
-            dependencies: ["CirclesCore", "CirclesCrypto", "CirclesSync"],
+            dependencies: ["CirclesCore", "CirclesCrypto", "CirclesSync", "CSQLite"],
             swiftSettings: swiftSettings
         ),
         .target(
             name: "CirclesKit",
             dependencies: ["CirclesCore", "CirclesCrypto", "CirclesSync", "CirclesNet", "CirclesStorage"],
+            swiftSettings: swiftSettings
+        ),
+        .target(
+            name: "CirclesPresentation",
+            dependencies: ["CirclesKit"],
             swiftSettings: swiftSettings
         ),
         .target(
@@ -69,7 +80,7 @@ let package = Package(
         ),
         .executableTarget(
             name: "circles-cli",
-            dependencies: ["CirclesKit", "CirclesCLISupport", .product(name: "ArgumentParser", package: "swift-argument-parser")],
+            dependencies: ["CirclesKit", "CirclesPresentation", "CirclesCLISupport", .product(name: "ArgumentParser", package: "swift-argument-parser")],
             swiftSettings: swiftSettings
         ),
         .executableTarget(
@@ -100,6 +111,16 @@ let package = Package(
         .testTarget(
             name: "CirclesNetTests",
             dependencies: ["CirclesNet"],
+            swiftSettings: swiftSettings
+        ),
+        .testTarget(
+            name: "CirclesStorageTests",
+            dependencies: ["CirclesStorage"],
+            swiftSettings: swiftSettings
+        ),
+        .testTarget(
+            name: "CirclesPresentationTests",
+            dependencies: ["CirclesPresentation", "CirclesNet"],
             swiftSettings: swiftSettings
         ),
         .testTarget(

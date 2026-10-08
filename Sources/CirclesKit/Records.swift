@@ -87,7 +87,7 @@ public struct Invite: Sendable, Codable {
 }
 
 /// A post as the reader sees it, after decryption and verification.
-public struct StreamItem: Sendable, Hashable {
+public struct StreamItem: Sendable, Hashable, Identifiable {
     public enum Audience: Sendable, Hashable {
         case everyone
         /// Limited to circles or people chosen by the author.
@@ -100,6 +100,53 @@ public struct StreamItem: Sendable, Hashable {
     public var created: HLCTimestamp
     public var body: RichText
     public var audience: Audience
+    public var attachments: [BlobRef]
+    public var reshared: ResharedPost?
+    public var comments: [StreamComment]
+    public var plusOnes: Int
+    public var plusOnedByMe: Bool
+    public var commentsEnabled: Bool
+    public var resharesEnabled: Bool
+
+    /// How to refer to this post when commenting, +1ing or resharing.
+    public var reference: ObjectRef { ObjectRef(author: author, id: id) }
+}
+
+/// A comment as shown under a post.
+public struct StreamComment: Sendable, Hashable, Identifiable {
+    public var id: ContentID
+    public var author: UserID
+    public var authorName: String
+    public var created: HLCTimestamp
+    public var body: RichText
+    /// Our own comment that the post's author hasn't republished yet, so
+    /// only we can see it.
+    public var pending: Bool
+}
+
+/// The original post inside a reshare.
+public struct ResharedPost: Sendable, Hashable {
+    public var id: ContentID
+    public var author: UserID
+    public var authorName: String
+    public var created: HLCTimestamp
+    public var body: RichText
+    public var attachments: [BlobRef]
+}
+
+/// Media to attach to a new post.
+public struct Attachment: Sendable {
+    public var data: [UInt8]
+    public var mediaType: String
+    public var width: UInt32?
+    public var height: UInt32?
+
+    public init(data: [UInt8], mediaType: String, width: UInt32? = nil, height: UInt32? = nil) {
+        self.data = data
+        self.mediaType = mediaType
+        self.width = width
+        self.height = height
+    }
 }
 
 public enum PostAudience: Sendable {
@@ -116,6 +163,9 @@ public enum AccountError: Error, Sendable, Equatable {
     case unknownContact(String)
     case circleExists(String)
     case emptyAudience
+    case unknownPost
+    case resharingNotAllowed
+    case commentsDisabled
 }
 
 import Foundation

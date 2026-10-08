@@ -194,3 +194,35 @@ struct ControlMessageTests {
 }
 
 import Synchronization
+
+@Suite("Media chunks in sync")
+struct BlobSyncTests {
+    @Test("chunks referenced by entries travel with them, are relayed onward, and aren't resent")
+    func blobsFollowEntries() async throws {
+        let alice = try Node(), bob = try Node(), carol = try Node()
+        for node in [alice, bob, carol] { try await node.bootstrap() }
+        try await alice.meet(bob); try await bob.meet(alice)
+        try await bob.meet(carol); try await carol.meet(bob)
+        carol.follow(alice.user)
+
+        let chunks: [[UInt8]] = [Array(repeating: 1, count: 300_000), Array(repeating: 2, count: 1000)]
+        var ids: [ContentID] = []
+        for chunk in chunks { ids.append(await alice.store.putBlob(chunk)) }
+        let created = HLCTimestamp(millis: now)
+        let post = Post(author: alice.user, created: created, body: RichText(plain: "photo"))
+        let item = ContentItem(kind: .post, object: try SignedObject(encoding: post, label: .post, with: alice.device))
+        try await alice.store.appendLocal(.publicContent(item), author: alice.user, device: alice.device, created: created, blobs: ids)
+
+        let (ra, rb) = try await sync(alice, bob)
+        #expect(rb.blobsReceived == 2 && ra.blobsSent == 2)
+        #expect(await bob.store.blob(ids[0]) == chunks[0])
+        #expect(await bob.store.neededBlobs(limit: 10).isEmpty)
+
+        // Carol gets Alice's entry and its chunks through Bob.
+        let (_, rc) = try await sync(bob, carol)
+        #expect(rc.received[alice.user] == 1 && rc.blobsReceived == 2, "\(rc)")
+
+        let (again, _) = try await sync(alice, bob)
+        #expect(again.blobsSent == 0)
+    }
+}

@@ -72,11 +72,15 @@ public struct Reaction: Sendable, Hashable, Codable {
     public var target: ObjectRef
     public var kind: ReactionKind
     public var created: HLCTimestamp
+    /// True when this withdraws an earlier reaction of the same kind. The
+    /// latest reaction per (author, kind) wins. Absent means false.
+    public var retracted: Bool?
 
-    public init(author: UserID, target: ObjectRef, kind: ReactionKind, created: HLCTimestamp) {
+    public init(author: UserID, target: ObjectRef, kind: ReactionKind, created: HLCTimestamp, retracted: Bool = false) {
         self.author = author
         self.target = target
         self.kind = kind
         self.created = created
+        self.retracted = retracted ? true : nil
     }
 }

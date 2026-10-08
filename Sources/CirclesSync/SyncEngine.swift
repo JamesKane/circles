@@ -1,5 +1,6 @@
 public import CirclesCore
 public import CirclesCrypto
+import Synchronization
 
 /// The authenticated peer of a session.
 public struct PeerInfo: Sendable {
@@ -46,6 +47,8 @@ public struct SyncReport: Sendable {
     /// Entries accepted, per author.
     public var received: [UserID: Int] = [:]
     public var sent = 0
+    public var blobsReceived = 0
+    public var blobsSent = 0
     /// Human-readable reasons for entries or documents that were rejected.
     public var rejected: [String] = []
 }
@@ -59,6 +62,8 @@ public struct SyncEngine: Sendable {
     /// Current wall time in Unix milliseconds.
     public let now: @Sendable () -> UInt64
     public var batchSize = 128
+    /// The most media chunks to ask for in one session.
+    public var maxBlobsPerSession = 1024
 
     public init(store: any LogStore, identityDocument: SignedObject, policy: SyncPolicy, now: @escaping @Sendable () -> UInt64) {
         self.store = store
@@ -106,28 +111,64 @@ public struct SyncEngine: Sendable {
         try await send(.want(try await wants(for: interests)), on: channel)
 
         let (peerWants, wantsContinuation) = AsyncStream.makeStream(of: [SyncMessage.Want].self)
-        return try await withThrowingTaskGroup(of: Int.self) { group in
-            // Answer the peer's want in a separate task, so a large response
-            // never stops us reading what the peer sends meanwhile.
+        let (peerEntriesDone, entriesDoneContinuation) = AsyncStream.makeStream(of: Void.self)
+        let (peerBlobWants, blobWantsContinuation) = AsyncStream.makeStream(of: [ContentID].self)
+        let requestedBlobs = RequestedBlobs()
+        let store = self.store, maxBlobs = maxBlobsPerSession
+        return try await withThrowingTaskGroup(of: (entries: Int, blobs: Int).self) { group in
+            // Everything we send after `want` comes from this one task, in a
+            // fixed order, so `done` always follows our own `wantBlobs`. (The
+            // peer stops reading at `done`.) It runs apart from the reading
+            // below, so a large response never stops us reading meanwhile.
             group.addTask {
-                var sent = 0
+                var sent = 0, blobsSent = 0
                 for await wants in peerWants {
                     sent += try await respond(to: wants, on: channel)
                 }
+                try await send(.entriesDone, on: channel)
+                // Ask for chunks only once the peer's entries are all stored.
+                for await _ in peerEntriesDone {}
+                let needed = try await store.neededBlobs(limit: maxBlobs)
+                requestedBlobs.set(needed)
+                try await send(.wantBlobs(needed), on: channel)
+                for await ids in peerBlobWants {
+                    for id in ids {
+                        guard let bytes = try await store.blob(id) else { continue }
+                        try await send(.blob(id, bytes), on: channel)
+                        blobsSent += 1
+                    }
+                }
                 try await send(.done, on: channel)
-                return sent
+                return (sent, blobsSent)
+            }
+            defer {
+                wantsContinuation.finish()
+                entriesDoneContinuation.finish()
+                blobWantsContinuation.finish()
             }
 
             var receivedWant = false
             var verifiedAuthors: [UserID: VerifiedIdentity] = [:]
             receiving: while true {
                 guard let bytes = try await channel.receive() else {
-                    wantsContinuation.finish()
                     throw SyncError.connectionClosed
                 }
                 switch try decodeMessage(bytes) {
                 case .hello, .control, .ready:
                     throw SyncError.protocolViolation("hello, control or ready after want")
+                case .entriesDone:
+                    entriesDoneContinuation.finish()
+                case .wantBlobs(let ids):
+                    blobWantsContinuation.yield(Array(ids.prefix(maxBlobsPerSession)))
+                    blobWantsContinuation.finish()
+                case .blob(let id, let bytes):
+                    // Only what we asked for, and only if the bytes match the hash.
+                    guard requestedBlobs.take(id), ContentID(hashing: bytes) == id else {
+                        report.rejected.append("unrequested or corrupt blob \(id)")
+                        continue
+                    }
+                    try await store.putBlob(bytes)
+                    report.blobsReceived += 1
                 case .want(let wants):
                     guard !receivedWant else { throw SyncError.protocolViolation("duplicate want") }
                     receivedWant = true
@@ -159,11 +200,12 @@ public struct SyncEngine: Sendable {
                 }
             }
             if !receivedWant {
-                wantsContinuation.finish()
                 throw SyncError.protocolViolation("done before want")
             }
+            blobWantsContinuation.finish()
             for try await sent in group {
-                report.sent += sent
+                report.sent += sent.entries
+                report.blobsSent += sent.blobs
             }
             return report
         }
@@ -275,5 +317,20 @@ public struct SyncEngine: Sendable {
         } catch {
             throw SyncError.malformedMessage(error)
         }
+    }
+}
+
+/// The media chunks this side asked for in a session, shared between the
+/// task that asks and the loop that receives.
+private final class RequestedBlobs: Sendable {
+    private let ids = Mutex<Set<ContentID>>([])
+
+    func set(_ new: [ContentID]) {
+        ids.withLock { $0 = Set(new) }
+    }
+
+    /// Removes `id`, returning whether it had been requested.
+    func take(_ id: ContentID) -> Bool {
+        ids.withLock { $0.remove(id) != nil }
     }
 }

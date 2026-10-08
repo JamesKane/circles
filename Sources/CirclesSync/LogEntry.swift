@@ -6,6 +6,9 @@ public enum ContentKind: UInt64, Sendable, Hashable, Codable {
     case post = 0
     case comment = 1
     case reaction = 2
+    /// A comment or reaction, republished by the post's author to the post's
+    /// audience (docs/DESIGN.md §9.4).
+    case threadItem = 3
 
     /// The signature label a content object of this kind is signed under.
     public var label: SignatureLabel {
@@ -13,6 +16,7 @@ public enum ContentKind: UInt64, Sendable, Hashable, Codable {
         case .post: .post
         case .comment: .comment
         case .reaction: .reaction
+        case .threadItem: .threadItem
         }
     }
 }
@@ -22,10 +26,34 @@ public enum ContentKind: UInt64, Sendable, Hashable, Codable {
 public struct ContentItem: Sendable, Hashable, Codable {
     public var kind: ContentKind
     public var object: SignedObject
+    /// Signed objects carried along so readers can verify the content without
+    /// fetching anything else, e.g. the original post and its author's
+    /// identity document in a reshare. Absent when empty (added in M4).
+    public var embedded: [SignedObject]?
 
-    public init(kind: ContentKind, object: SignedObject) {
+    public init(kind: ContentKind, object: SignedObject, embedded: [SignedObject] = []) {
         self.kind = kind
         self.object = object
+        self.embedded = embedded.isEmpty ? nil : embedded
+    }
+}
+
+/// A comment or reaction as republished by the post's author: the
+/// contributor's own signed object, plus their identity document so every
+/// reader can verify it, including readers who don't know the contributor.
+/// The author signs the whole thing (`SignatureLabel.threadItem`), which is
+/// what makes it part of the thread. Unrepublished comments aren't shown to
+/// others, so the author moderates their own thread.
+public struct ThreadItem: Sendable, Hashable, Codable {
+    /// The post this belongs to.
+    public var post: ContentID
+    public var contribution: ContentItem
+    public var contributorIdentity: SignedObject
+
+    public init(post: ContentID, contribution: ContentItem, contributorIdentity: SignedObject) {
+        self.post = post
+        self.contribution = contribution
+        self.contributorIdentity = contributorIdentity
     }
 }
 
@@ -84,14 +112,24 @@ public struct LogEntry: Sendable, Hashable, Codable {
     public var previous: ContentID?
     public var created: HLCTimestamp
     public var body: LogBody
+    /// IDs of the encrypted media chunks this entry's content refers to
+    /// (docs/DESIGN.md §9.3). Listed outside the encryption, so every node
+    /// that stores the entry, pods included, also fetches and keeps the
+    /// chunks. It reveals no more than the entry's size already does.
+    /// Absent when there are none (added in M4).
+    public var blobs: [ContentID]?
 
-    public init(author: UserID, device: DeviceID, sequence: UInt64, previous: ContentID?, created: HLCTimestamp, body: LogBody) {
+    public init(
+        author: UserID, device: DeviceID, sequence: UInt64, previous: ContentID?,
+        created: HLCTimestamp, body: LogBody, blobs: [ContentID]? = nil
+    ) {
         self.author = author
         self.device = device
         self.sequence = sequence
         self.previous = previous
         self.created = created
         self.body = body
+        self.blobs = blobs?.isEmpty == true ? nil : blobs
     }
 }
 
@@ -109,6 +147,13 @@ public struct VerifiedLogEntry: Sendable, Hashable {
     public init(signing entry: LogEntry, with device: borrowing DeviceKeyPair) throws(CryptoError) {
         precondition(entry.device == device.deviceID, "entry must name the signing device")
         signed = try SignedObject(encoding: entry, label: .logEntry, with: device)
+        self.entry = entry
+    }
+
+    /// Wraps an entry this node verified before, e.g. when migrating storage.
+    /// The store still enforces the hash chain on append.
+    public init(previouslyVerified signed: SignedObject, entry: LogEntry) {
+        self.signed = signed
         self.entry = entry
     }
 

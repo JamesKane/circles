@@ -16,6 +16,14 @@ public protocol LogStore: Sendable {
     func identityDocument(for user: UserID) async throws -> SignedObject?
     /// Stores a verified identity document if it's newer than the stored one.
     func saveIdentityDocument(_ document: SignedObject, verified: VerifiedIdentity) async throws
+
+    /// A stored blob (an encrypted media chunk), by the hash of its bytes.
+    func blob(_ id: ContentID) async throws -> [UInt8]?
+    /// Stores a blob under the hash of its bytes, and returns that ID.
+    @discardableResult
+    func putBlob(_ bytes: [UInt8]) async throws -> ContentID
+    /// Blobs referenced by stored entries but not stored yet.
+    func neededBlobs(limit: Int) async throws -> [ContentID]
 }
 
 extension LogStore {
@@ -42,6 +50,8 @@ public enum LogStoreError: Error, Sendable, Equatable {
 public actor MemoryLogStore: LogStore {
     private var logs: [UserID: [DeviceID: [VerifiedLogEntry]]] = [:]
     private var identities: [UserID: (document: SignedObject, version: UInt64)] = [:]
+    private var blobs: [ContentID: [UInt8]] = [:]
+    private var needed: [ContentID] = []
 
     public init() {}
 
@@ -60,6 +70,9 @@ public actor MemoryLogStore: LogStore {
             throw LogStoreError.notNextInSequence
         }
         logs[entry.entry.author, default: [:]][entry.entry.device, default: []].append(entry)
+        for id in entry.entry.blobs ?? [] where blobs[id] == nil && !needed.contains(id) {
+            needed.append(id)
+        }
     }
 
     public func entries(author: UserID, device: DeviceID, after sequence: UInt64, limit: Int) -> [SignedObject] {
@@ -79,6 +92,21 @@ public actor MemoryLogStore: LogStore {
         if let existing = identities[verified.user], existing.version >= verified.version { return }
         identities[verified.user] = (document, verified.version)
     }
+
+    public func blob(_ id: ContentID) -> [UInt8]? {
+        blobs[id]
+    }
+
+    public func putBlob(_ bytes: [UInt8]) -> ContentID {
+        let id = ContentID(hashing: bytes)
+        blobs[id] = bytes
+        needed.removeAll { $0 == id }
+        return id
+    }
+
+    public func neededBlobs(limit: Int) -> [ContentID] {
+        Array(needed.prefix(limit))
+    }
 }
 
 extension LogStore {
@@ -88,13 +116,14 @@ extension LogStore {
         _ body: LogBody,
         author: UserID,
         device: borrowing DeviceKeyPair,
-        created: HLCTimestamp
+        created: HLCTimestamp,
+        blobs: [ContentID]? = nil
     ) async throws -> VerifiedLogEntry {
         let deviceID = device.deviceID
         let head = try await head(author: author, device: deviceID)
         let entry = LogEntry(
             author: author, device: deviceID, sequence: (head?.sequence ?? 0) + 1,
-            previous: head?.id, created: created, body: body
+            previous: head?.id, created: created, body: body, blobs: blobs
         )
         let verified = try VerifiedLogEntry(signing: entry, with: device)
         try await append(verified)

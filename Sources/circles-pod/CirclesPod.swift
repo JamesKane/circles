@@ -23,9 +23,9 @@ struct PodGlobal: ParsableArguments {
 
     var homeURL: URL { directoryURL(home, environment: "CIRCLES_POD_HOME", default: ".circles-pod") }
 
-    func open() throws -> PodNode {
+    func open() async throws -> PodNode {
         do {
-            return try PodNode.open(home: homeURL)
+            return try await PodNode.open(home: homeURL)
         } catch AccountError.notFound {
             throw ValidationError("No pod in \(homeURL.path). Run `circles-pod init` first.")
         }
@@ -39,7 +39,7 @@ struct Init: AsyncParsableCommand {
     @Option(help: "The TCP port the pod will listen on.") var port: UInt16 = 7465
 
     func run() async throws {
-        let (_, code) = try PodNode.create(home: global.homeURL, host: host, port: port)
+        let (_, code) = try await PodNode.create(home: global.homeURL, host: host, port: port)
         say("Pod created. On your device, run:")
         say("  circles pod add \(try code.text)")
     }
@@ -62,7 +62,7 @@ struct Serve: AsyncParsableCommand {
     @Flag(help: "Ask the router to forward the port (PCP, NAT-PMP or UPnP-IGD).") var mapPort = false
 
     func run() async throws {
-        let pod = try global.open()
+        let pod = try await global.open()
         guard let owner = await pod.owner else { throw ValidationError("Not paired yet. Run `circles-pod pair`.") }
         let mapPort = self.mapPort
         try await runUntilInterrupted {
@@ -95,13 +95,13 @@ struct Status: AsyncParsableCommand {
     @OptionGroup var global: PodGlobal
 
     func run() async throws {
-        let pod = try global.open()
+        let pod = try await global.open()
         say("device:   \(pod.deviceID)")
         say("address:  \(await pod.host):\(await pod.port)")
         say("owner:    \(await pod.owner.map { "\($0)" } ?? "not paired")")
         say("contacts: \(await pod.config?.contacts.count ?? 0) (configured by the owner on sync)")
-        for author in await pod.store.authors() {
-            let entries = await pod.store.frontier(author: author).sequences.values.reduce(0, +)
+        for author in try await pod.store.authors() {
+            let entries = try await pod.store.frontier(author: author).sequences.values.reduce(0, +)
             say("  \(String("\(author)".prefix(28)))…  \(entries) entries")
         }
     }

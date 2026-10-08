@@ -3,7 +3,7 @@
 A reimplementation of the Google+ social model (Circles, the Stream, posts,
 +1s, Communities) on a peer-to-peer backbone, in Swift.
 
-**Status:** early development; milestones M0–M3. Devices discover each other on the local network, sync through your own pod while you're offline, and reach each other through relays. See [docs/DESIGN.md](docs/DESIGN.md).
+**Status:** early development; milestones M0–M4. Post to circles with photos, comment, +1 and reshare; sync on the local network, through your own pod while you're offline, or through relays. Command line only for now; native apps are next. See [docs/DESIGN.md](docs/DESIGN.md).
 
 ## Building
 
@@ -34,7 +34,11 @@ CIRCLES_HOME=$A circles post --circle Friends "Just for Friends"
 CIRCLES_HOME=$A circles serve &          # listens and advertises over mDNS
 
 CIRCLES_HOME=$B circles sync             # finds Alice on the LAN and syncs
-CIRCLES_HOME=$B circles stream
+CIRCLES_HOME=$B circles stream           # shows each post's short ID
+
+CIRCLES_HOME=$B circles comment <id> "Count me in"
+CIRCLES_HOME=$B circles plusone <id>
+CIRCLES_HOME=$A circles post --everyone --attach photo.jpg "Sunset"
 ```
 
 ### Pods and relays
@@ -63,8 +67,9 @@ circles sync               # local network, pods, then relays
   audience-encrypted envelopes, and the Noise XX handshake.
 - `Sources/CirclesSync`: per-device hash-linked logs and the sync protocol.
 - `Sources/CirclesNet`: Noise sessions over TCP (SwiftNIO) and mDNS discovery.
-- `Sources/CirclesStorage`: the file-backed log store.
-- `Sources/CirclesKit`: the `Account` façade used by apps and the CLI.
+- `Sources/CirclesStorage`: the SQLite store (logs, identities, media chunks).
+- `Sources/CirclesKit`: the `Account` and `PodNode` façades: posting, comments, +1s, reshares, media, sync.
+- `Sources/CirclesPresentation`: platform-neutral screen models every UI renders.
 - `Sources/circles-cli`, `circles-pod`, `circles-relay`: the command-line tools.
 
 ## License

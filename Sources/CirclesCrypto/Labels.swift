@@ -20,6 +20,7 @@ public struct SignatureLabel: Sendable, Hashable, RawRepresentable {
     public static let keyGrant = SignatureLabel(rawValue: "circles/v1/key-grant")
     public static let logEntry = SignatureLabel(rawValue: "circles/v1/log-entry")
     public static let podConfig = SignatureLabel(rawValue: "circles/v1/pod-config")
+    public static let threadItem = SignatureLabel(rawValue: "circles/v1/thread-item")
     public static let post = SignatureLabel(rawValue: "circles/v1/post")
     public static let comment = SignatureLabel(rawValue: "circles/v1/comment")
     public static let reaction = SignatureLabel(rawValue: "circles/v1/reaction")
@@ -37,4 +38,5 @@ enum Context {
     static let cekWrap = Array("circles/v1/cek-wrap".utf8) + [0]
     static let cekWrapInfo = Data("circles/v1/cek-wrap".utf8)
     static let keyGrantInfo = Data("circles/v1/key-grant".utf8)
+    static let mediaChunk = Array("circles/v1/media-chunk".utf8) + [0]
 }

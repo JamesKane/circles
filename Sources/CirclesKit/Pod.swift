@@ -73,10 +73,10 @@ public struct PodBundle: Sendable, Codable {
 ///
 ///     <home>/pod/device.cbor   device keys (0600)
 ///     <home>/pod/state.cbor    address, owner, current config
-///     <home>/logs, <home>/identities
+///     <home>/circles.sqlite    logs, identity documents, media chunks
 public actor PodNode {
     public nonisolated let home: URL
-    public nonisolated let store: FileLogStore
+    public nonisolated let store: SQLiteLogStore
     public nonisolated let deviceID: DeviceID
     public nonisolated let agreementKey: AgreementPublicKey
     public private(set) var host: String
@@ -104,7 +104,7 @@ public actor PodNode {
     }
 
     /// Creates a pod reachable at `host:port`, returning it and its pairing code.
-    public static func create(home: URL, host: String, port: UInt16) throws -> (PodNode, PodPairingCode) {
+    public static func create(home: URL, host: String, port: UInt16) async throws -> (PodNode, PodPairingCode) {
         let files = files(home)
         guard !FileManager.default.fileExists(atPath: files.device.path) else { throw AccountError.alreadyExists }
         let device = DeviceKeyPair()
@@ -112,23 +112,24 @@ public actor PodNode {
         try FileIO.write(try CBOREncoder().encode(StoredDevice(signing: raw.signingKey, agreement: raw.agreementKey)),
                          to: files.device, private: true)
         try FileIO.write(try CBOREncoder().encode(State(host: host, port: port)), to: files.state)
-        let pod = try open(home: home)
+        let pod = try await open(home: home)
         return (pod, PodPairingCode(device: pod.deviceID, agreementKey: pod.agreementKey, host: host, port: port))
     }
 
-    public static func open(home: URL) throws -> PodNode {
+    public static func open(home: URL) async throws -> PodNode {
         let files = files(home)
         guard let deviceBytes = try FileIO.read(files.device), let stateBytes = try FileIO.read(files.state) else {
             throw AccountError.notFound
         }
         let stored = try CBORDecoder().decode(StoredDevice.self, from: deviceBytes)
         let state = try CBORDecoder().decode(State.self, from: stateBytes)
-        return PodNode(home: home, device: try DeviceKeyPair(signingKey: stored.signing, agreementKey: stored.agreement), state: state)
+        return PodNode(home: home, store: try await openStore(home: home),
+                       device: try DeviceKeyPair(signingKey: stored.signing, agreementKey: stored.agreement), state: state)
     }
 
-    private init(home: URL, device: consuming DeviceKeyPair, state: State) {
+    private init(home: URL, store: SQLiteLogStore, device: consuming DeviceKeyPair, state: State) {
         self.home = home
-        store = FileLogStore(root: home)
+        self.store = store
         deviceID = device.deviceID
         agreementKey = device.agreementPublicKey
         host = state.host

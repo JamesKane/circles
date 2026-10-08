@@ -24,9 +24,9 @@ func texts(_ account: Account) async throws -> [String] {
 struct PodAndRelayTests {
     @Test("a pod stores and forwards while its owner is offline")
     func storeAndForward() async throws {
-        let alice = try Account.create(home: temporaryHome(), displayName: "Alice")
-        let bob = try Account.create(home: temporaryHome(), displayName: "Bob")
-        let (pod, _) = try PodNode.create(home: temporaryHome(), host: "127.0.0.1", port: 0)
+        let alice = try await Account.create(home: temporaryHome(), displayName: "Alice")
+        let bob = try await Account.create(home: temporaryHome(), displayName: "Bob")
+        let (pod, _) = try await PodNode.create(home: temporaryHome(), host: "127.0.0.1", port: 0)
 
         // The pod's port is only known once it listens; then Alice pairs it.
         let probe = try await NoiseListener(host: "127.0.0.1", port: 0, handshake: await pod.makeHandshake(role: .responder))
@@ -65,9 +65,9 @@ struct PodAndRelayTests {
 
     @Test("only the owner can configure a pod, and only for a certified pod")
     func podSecurity() async throws {
-        let alice = try Account.create(home: temporaryHome(), displayName: "Alice")
-        let mallory = try Account.create(home: temporaryHome(), displayName: "Mallory")
-        let (pod, code) = try PodNode.create(home: temporaryHome(), host: "127.0.0.1", port: 1)
+        let alice = try await Account.create(home: temporaryHome(), displayName: "Alice")
+        let mallory = try await Account.create(home: temporaryHome(), displayName: "Mallory")
+        let (pod, code) = try await PodNode.create(home: temporaryHome(), host: "127.0.0.1", port: 1)
 
         // A bundle that doesn't certify this pod is refused.
         await #expect(throws: PodError.notCertified) {
@@ -106,8 +106,8 @@ struct PodAndRelayTests {
         let relayTask = Task { try await relay.run() }
         defer { relayTask.cancel() }
 
-        let alice = try Account.create(home: temporaryHome(), displayName: "Alice")
-        let bob = try Account.create(home: temporaryHome(), displayName: "Bob")
+        let alice = try await Account.create(home: temporaryHome(), displayName: "Alice")
+        let bob = try await Account.create(home: temporaryHome(), displayName: "Bob")
         let endpoint = RelayEndpoint(host: "127.0.0.1", port: UInt16(relay.port), key: relayKey)
         try await alice.addRelay(endpoint)
         try await alice.addContact(invite: await bob.invite())

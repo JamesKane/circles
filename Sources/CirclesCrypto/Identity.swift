@@ -174,16 +174,21 @@ public struct IdentityDocument: Sendable, Hashable, Codable {
     public var revocations: [DeviceRevocation]
     /// Added in M3; absent in older documents.
     public var endpoints: Endpoints?
+    /// The name the user goes by publicly, shown to people who aren't their
+    /// contacts (e.g. other commenters on a post). Contacts see their own
+    /// petname instead. Added in M4.
+    public var displayName: String?
 
     public init(
         user: UserID, version: UInt64, certificates: [SignedObject],
-        revocations: [DeviceRevocation] = [], endpoints: Endpoints? = nil
+        revocations: [DeviceRevocation] = [], endpoints: Endpoints? = nil, displayName: String? = nil
     ) {
         self.user = user
         self.version = version
         self.certificates = certificates
         self.revocations = revocations
         self.endpoints = endpoints?.isEmpty == true ? nil : endpoints
+        self.displayName = displayName
     }
 
     public func signed(by identity: borrowing IdentityKeyPair) throws(CryptoError) -> SignedObject {
