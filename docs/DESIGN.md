@@ -267,6 +267,38 @@ Communities need many writers, moderators, and membership changes made by people
 3. **Own persistence.** Serialize group state into `CirclesStorage` ourselves, with crash-safe epoch transitions: never lose an epoch secret between committing and storing it.
 4. **Track audit status** for both libraries. A community feature labelled "secure" needs an audited (or at least independently reviewed) MLS stack before 1.0.
 
+#### Community design for M5 (decided 2026-10-08)
+
+**A community is an identity of its own.**
+- It has its own Ed25519 key, the "community key", held by the owner's device.
+- Its identity document certifies the community's *serving devices*: the owner's device as `.author`, and optionally pods as `.storeAndForward`. Its endpoints list pods and relays as usual.
+- So sync, verification, pods, relays and mDNS all work for communities unchanged: following a community is following its identity.
+- A device that serves a community runs one more listener that presents the community's identity document, the way pods present their owner's. The sync protocol doesn't change.
+
+**One sequencer, one order.**
+- MLS needs one agreed sequence of commits. The community's log is written by a single **sequencer device** (the owner's), and that device's hash-linked log *is* the order. Commits, Welcomes and posts take effect in log order.
+- Only the sequencer commits. Members never commit; they ask the sequencer, which also handles leaving.
+- Members process the community log strictly in order, keep their MLS state (sealed snapshots, §8.3 pre-M5 task 3), and store each post **decrypted when processed**. Old epochs' keys are deliberately discarded, so later decryption isn't possible.
+- Pods certified for the community store and serve its log (ciphertext for private communities), so the community stays readable while the owner is offline. New posts and members wait for the sequencer.
+- *Limitations:* a single sequencer is a single point of control and availability; no moderator roles beyond the owner yet; no post-compromise updates initiated by members.
+
+**Membership and joining.**
+- The MLS credential is the member's `UserID`. A join request carries an MLS KeyPackage **signed by one of the user's certified devices**. The sequencer checks it against the user's identity document before adding them, so other members can trust the roster: the sequencer is the authority.
+- Policies, all in M5:
+  - **open:** requests are accepted automatically
+  - **approval:** the owner approves or rejects
+  - **invite-only:** a request must carry an invite token signed by the community key
+- Requests travel as sync control messages to a serving device. Adds and removes are sequencer commits, and each new member's Welcome is published in the community log.
+
+**Posting.**
+- A member's post or comment goes into the member's own log, sealed (HPKE) to the sequencer device. The serving device wants members' logs, so it receives them whenever a member syncs with it.
+- The sequencer verifies the item and republishes it as a `ThreadItem`-like record, signed by the member and carrying their identity document. For a private community, that record is encrypted as an **MLS application message**.
+- Moderation is the same as for threads: only republished items appear, and the owner can remove them with deletions.
+
+**Visibility (decided 2026-10-08):**
+- **Public communities:** the log is signed but not encrypted, so anyone can follow it. There's no MLS group, and posting still requires membership.
+- **Private communities:** content is MLS-encrypted. **New members see posts from when they join onward**: MLS forward secrecy hides earlier epochs, and re-sharing history was left for later. (Google+ showed history to new members.)
+
 ### 8.4 Metadata exposure
 
 What leaks, and to whom:
