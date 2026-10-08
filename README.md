@@ -69,6 +69,16 @@ Apps/Gnome/.build/debug/CirclesGnome   # uses $CIRCLES_HOME or ~/.circles
 
 The app walks you through creating an identity, exchanging invites, circles, pods and relays, and stays online while it's open (no `circles serve` needed).
 
+### macOS app
+
+In progress. Needs Xcode 27 (Swift 6.4). Open `Apps/Apple/Circles.xcodeproj`, or:
+
+```sh
+xcodebuild -project Apps/Apple/Circles.xcodeproj -scheme Circles build
+```
+
+The app is sandboxed and keeps its data in its container's Application Support folder. So far it creates or opens your identity and stays online; the Stream and the other screens come next.
+
 ## Layout
 
 - `Sources/CirclesCore`: identifiers, deterministic CBOR, hybrid logical
@@ -83,6 +93,7 @@ The app walks you through creating an identity, exchanging invites, circles, pod
 - `Sources/CirclesPresentation`: platform-neutral screen models every UI renders.
 - `Sources/circles-cli`, `circles-pod`, `circles-relay`: the command-line tools.
 - `Apps/Gnome`: the GNOME app (GTK 4 + libadwaita), a separate package.
+- `Apps/Apple`: the SwiftUI app (an Xcode project over the root package).
 
 ## License
 
