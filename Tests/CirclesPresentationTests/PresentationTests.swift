@@ -196,3 +196,32 @@ struct DeletingScreenTests {
         #expect(stream.state.cards.isEmpty)
     }
 }
+
+@Suite("Arrivals for notifications")
+@MainActor
+struct ArrivalTests {
+    @Test("new posts from others and comments on our posts become arrivals; our own activity and the first load don't")
+    func arrivals() async throws {
+        let (alice, bob) = try await friends()
+        let id = try await alice.post(RichText(plain: "Dinner Friday?"), to: .everyone)
+        let stream = StreamScreenModel(account: alice)
+        await stream.perform(.refresh)
+        #expect(stream.state.arrivals.isEmpty && stream.state.arrivalGeneration == 0) // first load
+
+        try await alice.post(RichText(plain: "my own news"), to: .everyone)
+        await stream.perform(.refresh)
+        #expect(stream.state.arrivals.isEmpty) // our own post isn't news
+
+        try await sync(bob, with: alice)
+        try await bob.post(RichText(plain: String(repeating: "long ", count: 40)), to: .everyone)
+        try await bob.comment(RichText(plain: "I'm in"), on: ObjectRef(author: alice.user, id: id))
+        try await sync(alice, with: bob)
+        await stream.perform(.refresh)
+        #expect(stream.state.arrivalGeneration == 1)
+        #expect(stream.state.arrivals.map(\.title).sorted() == ["Bob posted", "Bob commented on your post"].sorted())
+        #expect(stream.state.arrivals.first { $0.kind == .post }?.body.count == 120)
+
+        await stream.perform(.refresh)
+        #expect(stream.state.arrivals.isEmpty && stream.state.arrivalGeneration == 1) // nothing new
+    }
+}

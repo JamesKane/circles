@@ -17,6 +17,7 @@ import CirclesPresentation
 enum Snapshot {
     static func run(_ app: AppController, into directory: String, photo: String?) async {
         try? FileManager.default.createDirectory(atPath: directory, withIntermediateDirectories: true)
+        app.notifier.deliver = false // record notifications; never pop them onto the desktop
         if let onboarding = app.onboarding {
             await save(app, "0-onboarding", in: directory)
             onboarding.fill(name: "Alice Liddell")
@@ -66,6 +67,22 @@ enum Snapshot {
         _ = try? await bob.sync(host: "127.0.0.1", port: port)
         check(await waitFor { app.streamModel?.state.cards.contains { $0.authorName == "Bob Marley" } == true },
               "an incoming sync from Bob updated the Stream without a refresh")
+        check(app.streamModel?.state.arrivals.map(\.title) == ["Bob Marley posted"], "Bob's post was reported as an arrival")
+        // The window is focused here, so nothing was sent; deliver as if unfocused.
+        if let arrivals = app.streamModel?.state.arrivals {
+            app.notifier.notify(arrivals, windowIsActive: false)
+        }
+        if let notification = app.notifier.sent.last {
+            check(notification.title == "Bob Marley posted", "an unfocused window gets a notification for Bob's post")
+            let before = app.openedPosts.count
+            app.notifier.activate(target: notification.target)
+            check(app.openedPosts.count == before + 1 && app.openedPosts.last?.author == bob.user,
+                  "activating the notification opened Bob's post")
+            await save(app, "3b-opened-from-notification", in: directory)
+            app.back()
+        } else {
+            check(false, "a notification was produced")
+        }
         await save(app, "3-stream-incoming", in: directory)
 
         app.showSettings()

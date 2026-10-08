@@ -18,9 +18,16 @@ final class AppController {
     private var stream: StreamPage?
     private var pages: [AnyObject] = [] // keeps page controllers alive
     private var composer: ComposerDialog?
+    private(set) var notifier: Notifier!
+    private(set) var openedPosts: [ObjectRef] = []
 
     init(application: UnsafeMutablePointer<AdwApplication>) {
         self.application = application
+        notifier = Notifier(application: application) { [weak self] post in
+            guard let self else { return }
+            self.open(post)
+            gtk_window_present(g(self.window))
+        }
     }
 
     func activate(home: URL) async {
@@ -63,6 +70,16 @@ final class AppController {
         adw_application_window_set_content(g(window), navigation)
         stream.model.send(.refresh)
         network.send(.start)
+        // Arrivals become desktop notifications while the window is unfocused.
+        var notified = 0
+        observe { [weak self, weak stream] in
+            guard let self, let stream else { return }
+            let state = stream.model.state
+            if state.arrivalGeneration != notified {
+                notified = state.arrivalGeneration
+                notifier.notify(state.arrivals, windowIsActive: gtk_window_is_active(g(window)) != 0)
+            }
+        }
         // New content from any sync, incoming or outgoing, refreshes the Stream.
         var seen = 0
         observe { [weak stream, weak network] in
@@ -122,6 +139,7 @@ final class AppController {
 
     func open(_ post: ObjectRef) {
         guard let account else { return }
+        openedPosts.append(post)
         let page = PostPage(model: PostScreenModel(post: post, account: account), media: MediaLoader(account: account), app: self)
         pages.append(page)
         adw_navigation_view_push(g(navigation), g(page.widget))
