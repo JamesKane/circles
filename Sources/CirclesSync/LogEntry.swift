@@ -188,6 +188,11 @@ public struct VerifiedLogEntry: Sendable, Hashable {
         guard claimed.author == author.user, claimed.device == signed.signerDevice else {
             throw .wrongAuthorOrDevice
         }
+        // A revoked device's log stops where the revocation says, whatever
+        // time later entries claim.
+        if let last = author.lastSequences[claimed.device], claimed.sequence > last {
+            throw .verificationFailed(.deviceRevoked(claimed.device))
+        }
         let expected = (head?.sequence ?? 0) + 1
         guard claimed.sequence == expected, claimed.previous == head?.id else {
             throw .outOfSequence(device: claimed.device, expected: expected, got: claimed.sequence)

@@ -31,9 +31,13 @@ public struct CommunityProfile: Sendable, Hashable, Codable {
     public var visibility: CommunityVisibility
     public var joinPolicy: JoinPolicy
     public var owner: UserID
+    /// Proof of work a join request must carry (open and approval
+    /// communities), in leading zero bits. Absent: none (added in M7).
+    public var postageBits: Int?
 
     public init(community: UserID, version: UInt64, name: String, description: String,
-                visibility: CommunityVisibility, joinPolicy: JoinPolicy, owner: UserID) {
+                visibility: CommunityVisibility, joinPolicy: JoinPolicy, owner: UserID, postageBits: Int? = nil) {
+        self.postageBits = postageBits
         self.community = community
         self.version = version
         self.name = name
@@ -72,13 +76,29 @@ public struct JoinRequest: Sendable, Hashable, Codable {
     /// A signed `CommunityInvite`, for invite-only communities.
     public var invite: SignedObject?
     public var createdMillis: UInt64
+    /// A `Postage` nonce over this request with `postage` absent, when the
+    /// community asks for proof of work (added in M7).
+    public var postage: UInt64?
 
-    public init(community: UserID, user: UserID, keyPackage: [UInt8]?, invite: SignedObject?, createdMillis: UInt64) {
+    public init(community: UserID, user: UserID, keyPackage: [UInt8]?, invite: SignedObject?, createdMillis: UInt64,
+                postage: UInt64? = nil) {
+        self.postage = postage
         self.community = community
         self.user = user
         self.keyPackage = keyPackage
         self.invite = invite
         self.createdMillis = createdMillis
+    }
+}
+
+extension JoinRequest {
+    /// The bytes postage is computed over: the request without its postage.
+    public var postagePayload: [UInt8] {
+        get throws {
+            var unstamped = self
+            unstamped.postage = nil
+            return try CBOREncoder().encode(unstamped)
+        }
     }
 }
 

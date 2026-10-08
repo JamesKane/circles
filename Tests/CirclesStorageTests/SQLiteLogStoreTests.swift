@@ -18,6 +18,28 @@ extension SealedKeyGrant {
 
 @Suite("SQLite log store")
 struct SQLiteLogStoreTests {
+    @Test("learning of a revocation drops entries past the revoked device's last standing one")
+    func revocationPrunes() async throws {
+        let identity = IdentityKeyPair(), laptop = DeviceKeyPair(), phone = DeviceKeyPair()
+        let certificates = [
+            try DeviceCertificate.issue(for: laptop, by: identity, capabilities: .author, issuedMillis: 1, validForMillis: 1 << 50),
+            try DeviceCertificate.issue(for: phone, by: identity, capabilities: .author, issuedMillis: 1, validForMillis: 1 << 50),
+        ]
+        let store = try SQLiteLogStore(path: temporaryDirectory().appendingPathComponent("db.sqlite"))
+        let user = identity.userID
+        let initial = try IdentityDocument(user: user, version: 1, certificates: certificates).signed(by: identity)
+        try await store.saveIdentityDocument(initial, verified: try VerifiedIdentity(verifying: initial, for: user))
+        for millis: UInt64 in [1, 2, 3] {
+            try await store.appendLocal(.keyGrant(.stub), author: user, device: phone, created: HLCTimestamp(millis: millis))
+        }
+        try await store.appendLocal(.keyGrant(.stub), author: user, device: laptop, created: HLCTimestamp(millis: 4))
+        let revoked = try IdentityDocument(user: user, version: 2, certificates: certificates,
+                                           revocations: [DeviceRevocation(device: phone.deviceID, revokedAtMillis: 10, lastSequence: 1)]).signed(by: identity)
+        try await store.saveIdentityDocument(revoked, verified: try VerifiedIdentity(verifying: revoked, for: user))
+        #expect(try await store.head(author: user, device: phone.deviceID)?.sequence == 1)
+        #expect(try await store.head(author: user, device: laptop.deviceID)?.sequence == 1)
+    }
+
     let author = try! UserID(ed25519PublicKey: [UInt8](repeating: 1, count: 32))
 
     @Test("appends must follow the head, and persist across store instances")

@@ -26,7 +26,7 @@ public struct NoiseDHTTransport: DHTTransport {
         return try await withThrowingTaskGroup(of: DHTMessage.self) { group in
             group.addTask {
                 try await withNoiseConnection(host: contact.host, port: Int(contact.port), handshake: handshake,
-                                              handshakeTimeout: timeout) { session in
+                                              handshakeTimeout: timeout, purpose: DHTPuzzle.noisePurpose) { session in
                     guard session.remoteStaticKey == contact.key else { throw DHTError.wrongNode }
                     try await session.send(try CBOREncoder().encode(request))
                     guard let reply = try await session.receive() else { throw DHTError.unexpectedResponse }
@@ -40,6 +40,29 @@ public struct NoiseDHTTransport: DHTTransport {
             defer { group.cancelAll() }
             return try await group.next()!
         }
+    }
+}
+
+/// A node's DHT key pair, kept in a file (0600): loaded, or ground to solve
+/// the puzzle (docs/DESIGN.md §12) and saved on first use.
+enum DHTKeyFile {
+    private struct Stored: Codable {
+        var signing: [UInt8]
+        var agreement: [UInt8]
+    }
+
+    static func loadOrCreate(_ url: URL) throws -> DeviceKeyPair {
+        if let bytes = try FileIO.read(url) {
+            let stored = try CBORDecoder().decode(Stored.self, from: bytes)
+            let keys = try DeviceKeyPair(signingKey: stored.signing, agreementKey: stored.agreement)
+            // A key ground for an easier puzzle (e.g. by an older version)
+            // is replaced.
+            if DHTPuzzle.isSolved(keys.agreementPublicKey) { return keys }
+        }
+        let keys = DHTPuzzle.grind()
+        let raw = keys.exportRawRepresentation()
+        try FileIO.write(try CBOREncoder().encode(Stored(signing: raw.signingKey, agreement: raw.agreementKey)), to: url, private: true)
+        return keys
     }
 }
 
@@ -83,10 +106,12 @@ public struct DHTServer: Sendable {
     public let node: DHTNode
     let listener: NoiseListener
 
-    public init(identity: RelayIdentity, host: String, port: Int) async throws {
-        listener = try await NoiseListener(host: host, port: port, handshake: identity.makeHandshake())
-        node = DHTNode(key: identity.agreementKey, listenPort: UInt16(listener.port),
-                       transport: NoiseDHTTransport { identity.makeHandshake(role: .initiator) },
+    /// Keeps its key in `home` (`dht/key.cbor`), ground on first use.
+    public init(home: URL, host: String, port: Int) async throws {
+        let keys = KeyHolder(try DHTKeyFile.loadOrCreate(home.appendingPathComponent("dht").appendingPathComponent("key.cbor")))
+        listener = try await NoiseListener(host: host, port: port, handshake: keys.handshake(role: .responder))
+        node = DHTNode(key: keys.key, listenPort: UInt16(listener.port),
+                       transport: NoiseDHTTransport { keys.handshake(role: .initiator) },
                        now: { wallClockMillis() })
     }
 
@@ -115,6 +140,21 @@ public struct DHTServer: Sendable {
     }
 }
 
+/// Holds non-copyable keys for use from Sendable closures.
+final class KeyHolder: Sendable {
+    private let keys: DeviceKeyPair
+    let key: AgreementPublicKey
+
+    init(_ keys: consuming DeviceKeyPair) {
+        key = keys.agreementPublicKey
+        self.keys = keys
+    }
+
+    func handshake(role: NoiseHandshake.Role) -> NoiseHandshake {
+        NoiseHandshake(role: role, device: keys)
+    }
+}
+
 /// Lets the account's DHT transport reach the account's device key without
 /// a reference cycle.
 final class WeakAccount: @unchecked Sendable {
@@ -123,6 +163,13 @@ final class WeakAccount: @unchecked Sendable {
 
 extension Account {
     // MARK: Answering
+
+    /// A listener that answers sync with our device key and DHT requests
+    /// with our DHT key.
+    public func makeListener(host: String = "0.0.0.0", port: Int) async throws -> NoiseListener {
+        try await NoiseListener(host: host, port: port, handshake: makeHandshake(role: .responder),
+                                alternates: [DHTPuzzle.noisePurpose: makeDHTHandshake(role: .responder)])
+    }
 
     /// Answers an incoming session: a DHT request, or sync as ourselves or
     /// as a community we sequence. Returns the sync report, if it was sync.
@@ -158,11 +205,11 @@ extension Account {
         }
         for identity in identities {
             for pod in identity.endpoints.pods {
-                guard let certificate = identity.certificates[pod.device] else { continue }
-                seeds.append(DHTContact(key: certificate.agreementKey, host: pod.host, port: pod.port))
+                guard let key = pod.dhtKey, identity.certificates[pod.device] != nil else { continue }
+                seeds.append(DHTContact(key: key, host: pod.host, port: pod.port))
             }
         }
-        var seen: Set<AgreementPublicKey> = [device.agreementPublicKey]
+        var seen: Set<AgreementPublicKey> = [dhtKeys.agreementPublicKey]
         return seeds.filter { seen.insert($0.key).inserted }
     }
 

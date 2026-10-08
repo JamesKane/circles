@@ -30,6 +30,9 @@ struct CommunityState: Codable, Sendable {
     var invite: SignedObject?
     /// Owner, approval policy: requests waiting for a decision.
     var pendingRequests: [PendingRequest] = []
+    /// Pending members: our signed (and stamped) request, and when.
+    var stampedRequest: SignedObject?
+    var stampedMillis: UInt64?
     /// Who's in, as the community log says.
     var roster: [UserID] = []
     /// Members: how far each of the community's device logs has been read.
@@ -113,9 +116,20 @@ public enum CommunityError: Error, Sendable, Equatable {
     case inviteExpired
     case invalidRequest
     case unknownPost
+    case staleRequest
+    case postageRequired
+    case queueFull
 }
 
 extension Account {
+    /// How long a signed join request stays valid.
+    static let joinRequestLifetimeMillis: UInt64 = 3600 * 1000
+    /// Proof of work new communities ask of join requests: about 4 million
+    /// hashes, under a second on a desktop. Lowered in tests.
+    nonisolated(unsafe) public static var defaultJoinPostageBits = 22
+    /// Requests waiting for approval, at most.
+    static let maxPendingRequests = 200
+
     // MARK: State
 
     func loadCommunities() throws -> [CommunityState] {
@@ -176,7 +190,7 @@ extension Account {
     /// sequencer. Returns its ID (the community key's public key).
     @discardableResult
     public func createCommunity(name: String, description: String = "", visibility: CommunityVisibility,
-                                joinPolicy: JoinPolicy) async throws -> UserID {
+                                joinPolicy: JoinPolicy, postageBits: Int? = nil) async throws -> UserID {
         try reload()
         let key = IdentityKeyPair()
         let community = key.userID
@@ -186,8 +200,10 @@ extension Account {
         unsigned.endpoints = Self.communityEndpoints(from: endpoints, device: deviceID)
         let document = try unsigned.signed(by: key)
         try await store.saveIdentityDocument(document, verified: try VerifiedIdentity(verifying: document, for: community))
+        // Invites already show permission; other requests carry proof of work.
+        let postage = joinPolicy == .inviteOnly ? nil : postageBits ?? Self.defaultJoinPostageBits
         let profile = CommunityProfile(community: community, version: 1, name: name, description: description,
-                                       visibility: visibility, joinPolicy: joinPolicy, owner: user)
+                                       visibility: visibility, joinPolicy: joinPolicy, owner: user, postageBits: postage)
         let signedProfile = try SignedObject(signing: try CBOREncoder().encode(profile), label: .communityProfile, with: key)
 
         var states = try loadCommunities()
@@ -303,12 +319,23 @@ extension Account {
         let payload = try peer.identity.verify(control, label: .communityJoin, atMillis: wallClockMillis())
         let request = try CBORDecoder().decode(JoinRequest.self, from: payload)
         guard request.community == community, request.user == peer.user else { throw CommunityError.invalidRequest }
+        // Fresh only, so a captured request can't be replayed later (e.g. to
+        // re-add someone who left). Pending members sign a new one each sync.
+        let now = wallClockMillis()
+        guard request.createdMillis + Self.joinRequestLifetimeMillis >= now, request.createdMillis <= now + 5 * 60 * 1000 else {
+            throw CommunityError.staleRequest
+        }
         let state = try self.community(community)
         guard let profile = state.decodedProfile, !state.roster.contains(request.user) else { return }
         if profile.visibility == .private {
             guard let keyPackage = request.keyPackage,
                   try CommunityGroup.inspect(keyPackage: keyPackage).identity == request.user.multicodecBytes
             else { throw CommunityError.invalidRequest }
+        }
+        if profile.joinPolicy != .inviteOnly, let bits = profile.postageBits, bits > 0 {
+            guard let nonce = request.postage, Postage.isValid(try request.postagePayload, nonce: nonce, bits: bits) else {
+                throw CommunityError.postageRequired
+            }
         }
         switch profile.joinPolicy {
         case .open:
@@ -325,6 +352,8 @@ extension Account {
         case .approval:
             let name = peer.identity.document.displayName ?? String(request.user.description.prefix(20))
             try updateCommunity(community) { state in
+                let waiting = state.pendingRequests.contains { $0.request.user == request.user }
+                guard waiting || state.pendingRequests.count < Self.maxPendingRequests else { throw CommunityError.queueFull }
                 state.pendingRequests.removeAll { $0.request.user == request.user }
                 state.pendingRequests.append(.init(request: request, name: name))
             }
@@ -497,11 +526,24 @@ extension Account {
     }
 
     /// Our join request for a community we're pending in, signed by this device.
-    func joinRequest(for community: UserID) throws -> SignedObject? {
+    /// Reused for 50 minutes (requests stay valid for an hour), so proof of
+    /// work is paid once, not at every sync.
+    func joinRequest(for community: UserID) async throws -> SignedObject? {
         guard let state = try loadCommunities().first(where: { $0.community == community }), state.role == .pending else { return nil }
-        let request = JoinRequest(community: community, user: user, keyPackage: state.joinSecrets?.keyPackage,
-                                  invite: state.invite, createdMillis: wallClockMillis())
-        return try SignedObject(encoding: request, label: .communityJoin, with: device)
+        let now = wallClockMillis()
+        if let stamped = state.stampedRequest, let at = state.stampedMillis, now < at + 50 * 60 * 1000 { return stamped }
+        var request = JoinRequest(community: community, user: user, keyPackage: state.joinSecrets?.keyPackage,
+                                  invite: state.invite, createdMillis: now)
+        if let profile = state.decodedProfile, profile.joinPolicy != .inviteOnly, let bits = profile.postageBits, bits > 0 {
+            let payload = try request.postagePayload
+            request.postage = await Task.detached(priority: .utility) { Postage.stamp(payload, bits: bits) }.value
+        }
+        let signed = try SignedObject(encoding: request, label: .communityJoin, with: device)
+        try updateCommunity(community) { state in
+            state.stampedRequest = signed
+            state.stampedMillis = now
+        }
+        return signed
     }
 
     /// Reads new entries of every community we belong to (or are joining),

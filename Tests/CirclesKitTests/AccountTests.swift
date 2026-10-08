@@ -5,15 +5,19 @@ import CirclesCrypto
 import CirclesSync
 import CirclesNet
 import CirclesStorage
+import CirclesDHT
 @testable import CirclesKit
 
 func temporaryHome() -> URL {
-    FileManager.default.temporaryDirectory.appendingPathComponent("circles-test-\(UUID().uuidString)")
+    // Join-request proof of work at test strength (debug builds hash slowly).
+    Account.defaultJoinPostageBits = 8
+    DHTPuzzle.bits = 4
+    return FileManager.default.temporaryDirectory.appendingPathComponent("circles-test-\(UUID().uuidString)")
 }
 
 /// Serves `account`'s sync engine on a random local port for the duration of `body`.
 func serving<R>(_ account: Account, _ body: (Int) async throws -> R) async throws -> R {
-    let listener = try await NoiseListener(host: "127.0.0.1", port: 0, handshake: await account.makeHandshake(role: .responder))
+    let listener = try await account.makeListener(host: "127.0.0.1", port: 0)
     let engine = await account.syncEngine()
     let task = Task { try await listener.run { session in _ = try await engine.run(over: session) } }
     defer { task.cancel() }

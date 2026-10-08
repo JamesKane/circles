@@ -8,7 +8,7 @@ import CirclesNet
 
 /// Runs a pod's listener for the duration of `body`.
 func servingPod<R>(_ pod: PodNode, port: Int = 0, _ body: (Int) async throws -> R) async throws -> R {
-    let listener = try await NoiseListener(host: "127.0.0.1", port: port, handshake: await pod.makeHandshake(role: .responder))
+    let listener = try await pod.makeListener(host: "127.0.0.1", port: port)
     let task = Task {
         try await listener.run { session in _ = try await pod.respond(over: session) }
     }
@@ -29,7 +29,7 @@ struct PodAndRelayTests {
         let (pod, _) = try await PodNode.create(home: temporaryHome(), host: "127.0.0.1", port: 0)
 
         // The pod's port is only known once it listens; then Alice pairs it.
-        let probe = try await NoiseListener(host: "127.0.0.1", port: 0, handshake: await pod.makeHandshake(role: .responder))
+        let probe = try await pod.makeListener(host: "127.0.0.1", port: 0)
         let podPort = probe.port
         try await pod.setAddress(host: "127.0.0.1", port: UInt16(podPort))
         let bundle = try await alice.addPod(await pod.pairingCode)
@@ -132,5 +132,33 @@ extension Account {
         let stranger = try UserID(ed25519PublicKey: [UInt8](repeating: 0x5A, count: 32))
         let config = PodConfig(owner: owner, version: .max, contacts: [user, stranger])
         return try signForTesting(config, label: .podConfig)
+    }
+}
+
+@Suite("Revoking devices")
+struct RevokeDeviceTests {
+    @Test("a revoked pod loses its address and can't authenticate, even with its old identity document")
+    func revokePod() async throws {
+        let alice = try await Account.create(home: temporaryHome(), displayName: "Alice")
+        let bob = try await Account.create(home: temporaryHome(), displayName: "Bob")
+        let (pod, _) = try await PodNode.create(home: temporaryHome(), host: "127.0.0.1", port: 0)
+        let listener = try await pod.makeListener(host: "127.0.0.1", port: 0)
+        try await pod.setAddress(host: "127.0.0.1", port: UInt16(listener.port))
+        _ = try await pod.pair(try await alice.addPod(await pod.pairingCode))
+        try await befriend(alice, bob)
+        let task = Task { try await listener.run { session in _ = try await pod.respond(over: session) } }
+        defer { task.cancel() }
+        _ = try await alice.sync(host: "127.0.0.1", port: listener.port) // configures the pod (Bob is a contact)
+        _ = try await bob.sync(host: "127.0.0.1", port: listener.port) // works before
+
+        await #expect(throws: AccountError.cannotRevokeThisDevice) { try await alice.revokeDevice(alice.deviceID) }
+        try await alice.revokeDevice(pod.deviceID)
+        #expect(await alice.endpoints.pods.isEmpty)
+        #expect(try await alice.devices().first { $0.device == pod.deviceID }?.revoked == true)
+
+        // Bob learns of the revocation from Alice; the pod still holds and
+        // presents the old document, which no longer gets it in.
+        try await serving(alice) { port in _ = try await bob.sync(host: "127.0.0.1", port: port) }
+        await #expect(throws: (any Error).self) { try await bob.sync(host: "127.0.0.1", port: listener.port) }
     }
 }

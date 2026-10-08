@@ -24,7 +24,7 @@ struct PushIntegrationTests {
 
         // Alice's pod.
         let (pod, _) = try await PodNode.create(home: temporaryHome(), host: "127.0.0.1", port: 0)
-        let podListener = try await NoiseListener(host: "127.0.0.1", port: 0, handshake: await pod.makeHandshake(role: .responder))
+        let podListener = try await pod.makeListener(host: "127.0.0.1", port: 0)
         try await pod.setAddress(host: "127.0.0.1", port: UInt16(podListener.port))
         _ = try await pod.pair(try await alice.addPod(await pod.pairingCode))
         let podTask = Task { try await podListener.run { session in _ = try await pod.respond(over: session) } }

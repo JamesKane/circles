@@ -83,7 +83,7 @@ struct SyncEngineTests {
 
         let (_, rb) = try await sync(mallory, bob)
         #expect(rb.received[alice.user] == nil)
-        #expect(rb.rejected.contains { $0.contains("unknownDevice") })
+        #expect(rb.rejected.contains { $0.contains("unknownDevice") }, "rejected: \(rb.rejected)")
         #expect(try await bob.store.allEntries(author: alice.user).isEmpty)
     }
 

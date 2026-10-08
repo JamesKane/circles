@@ -134,7 +134,7 @@ struct DHTScreenTests {
     func addByUserID() async throws {
         let alice = try await Account.create(home: temporaryHome(), displayName: "Alice")
         let bob = try await Account.create(home: temporaryHome(), displayName: "Bob")
-        let server = try await DHTServer(identity: try RelayIdentity(home: temporaryHome()), host: "127.0.0.1", port: 0)
+        let server = try await DHTServer(home: temporaryHome(), host: "127.0.0.1", port: 0)
         let task = Task { try await server.run(seeds: []) }
         defer { task.cancel() }
         let node = try DHTNodeText.text(for: DHTContact(key: server.node.key, host: "127.0.0.1", port: UInt16(server.port)))

@@ -91,6 +91,10 @@ public actor MemoryLogStore: LogStore {
     public func saveIdentityDocument(_ document: SignedObject, verified: VerifiedIdentity) {
         if let existing = identities[verified.user], existing.version >= verified.version { return }
         identities[verified.user] = (document, verified.version)
+        // Drop entries past a revoked device's last standing one.
+        for (device, last) in verified.lastSequences {
+            logs[verified.user]?[device]?.removeAll { $0.entry.sequence > last }
+        }
     }
 
     public func blob(_ id: ContentID) -> [UInt8]? {

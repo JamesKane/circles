@@ -82,11 +82,20 @@ public actor DHTNode {
     public static let alpha = 3
     public static let recordLifetimeMillis: UInt64 = 24 * 3600 * 1000
     public static let maxRecords = 10_000
+    /// Disjoint paths for value lookups and publishing (S/Kademlia).
+    public static let lookupPaths = 3
+    /// Stores accepted per requesting IP per hour: room for a household of
+    /// owners republishing every 30 minutes, not for flooding.
+    public static let storesPerHostPerHour = 60
 
     private var table: RoutingTable
     private var records: [NodeID: Record] = [:]
+    private var storeCounts: [String: (count: Int, windowStart: UInt64)] = [:]
     private let transport: any DHTTransport
     private let now: @Sendable () -> UInt64
+    private let capacity: Int
+    /// The puzzle difficulty a contact's key must meet to enter our table.
+    public nonisolated let puzzleBits: Int
 
     struct Record: Sendable {
         var document: SignedObject
@@ -95,7 +104,10 @@ public actor DHTNode {
     }
 
     public init(key: AgreementPublicKey, listenPort: UInt16?, transport: any DHTTransport,
-                now: @escaping @Sendable () -> UInt64) {
+                now: @escaping @Sendable () -> UInt64, capacity: Int = DHTNode.maxRecords,
+                puzzleBits: Int = DHTPuzzle.bits) {
+        self.capacity = capacity
+        self.puzzleBits = puzzleBits
         self.key = key
         id = NodeID(node: key)
         self.listenPort = listenPort
@@ -115,7 +127,7 @@ public actor DHTNode {
     /// (its proven key and observed address, with the port it said it
     /// listens on), or nil if it doesn't accept connections.
     public func handle(_ request: DHTMessage, from contact: DHTContact?, observedHost: String?) -> DHTMessage {
-        if let contact { table.saw(contact) }
+        if let contact { see(contact) }
         switch request {
         case .findNode(let target, _):
             return .nodes(closest(to: target, excluding: contact), observed: observedHost)
@@ -124,23 +136,53 @@ public actor DHTNode {
             if let record = records[key] { return .value(record.document, nodes: closest(to: key, excluding: contact)) }
             return .nodes(closest(to: key, excluding: contact), observed: observedHost)
         case .store(let document, _):
+            guard withinStoreQuota(observedHost) else { return .stored(false) }
             return .stored(accept(document))
         case .nodes, .value, .stored:
             return .stored(false)
         }
     }
 
+    /// Adds a contact to the routing table if its key solves the puzzle.
+    private func see(_ contact: DHTContact) {
+        guard DHTPuzzle.isSolved(contact.key, bits: puzzleBits) else { return }
+        table.saw(contact)
+    }
+
     private func closest(to target: NodeID, excluding contact: DHTContact?) -> [DHTContact] {
         table.closest(to: target, count: Self.k + 1).filter { $0.key != contact?.key }.prefix(Self.k).map { $0 }
     }
 
-    /// Keeps a valid identity document, unless we hold a newer one.
+    /// Counts a store from `host` against its hourly quota.
+    private func withinStoreQuota(_ host: String?) -> Bool {
+        guard let host else { return true } // ourselves, in tests
+        let time = now()
+        var entry = storeCounts[host] ?? (0, time)
+        if time - entry.windowStart >= 3600 * 1000 { entry = (0, time) }
+        guard entry.count < Self.storesPerHostPerHour else { return false }
+        entry.count += 1
+        storeCounts[host] = entry
+        if storeCounts.count > 4 * capacity {
+            storeCounts = storeCounts.filter { time - $0.value.windowStart < 3600 * 1000 }
+        }
+        return true
+    }
+
+    /// Keeps a valid identity document, unless we hold a newer one. When
+    /// full, a record replaces the one farthest from our ID if it's closer:
+    /// Kademlia nodes answer for keys near them, so flooding can't push
+    /// those out.
     private func accept(_ document: SignedObject) -> Bool {
         guard let verified = Self.verify(document) else { return false }
         let key = NodeID(user: verified.user)
         expire()
         if let existing = records[key], existing.version > verified.version { return false }
-        guard records[key] != nil || records.count < Self.maxRecords else { return false }
+        if records[key] == nil, records.count >= capacity {
+            guard let farthest = records.keys.max(by: { $0.distance(to: id).lexicographicallyPrecedes($1.distance(to: id)) }),
+                  key.distance(to: id).lexicographicallyPrecedes(farthest.distance(to: id))
+            else { return false }
+            records[farthest] = nil
+        }
         records[key] = Record(document: document, version: verified.version, expiresMillis: now() + Self.recordLifetimeMillis)
         return true
     }
@@ -161,7 +203,7 @@ public actor DHTNode {
     /// looking up our own ID. Returns how many nodes we now know.
     @discardableResult
     public func bootstrap(_ seeds: [DHTContact]) async -> Int {
-        for seed in seeds where seed.key != key { table.saw(seed) }
+        for seed in seeds where seed.key != key { see(seed) }
         _ = await lookup(id, value: nil)
         // Also look up a random ID, to learn nodes beyond our neighborhood.
         _ = await lookup(NodeID.random(), value: nil)
@@ -169,9 +211,9 @@ public actor DHTNode {
     }
 
     /// Finds the newest identity document for `user` the network holds.
-    public func find(_ user: UserID) async -> SignedObject? {
+    public func find(_ user: UserID, paths: Int = DHTNode.lookupPaths) async -> SignedObject? {
         let key = NodeID(user: user)
-        let found = await lookup(key, value: key).records.compactMap { record -> (SignedObject, UInt64)? in
+        let found = await lookup(key, value: key, paths: paths).records.compactMap { record -> (SignedObject, UInt64)? in
             guard let verified = Self.verify(record), verified.user == user else { return nil }
             return (record, verified.version)
         }
@@ -182,11 +224,11 @@ public actor DHTNode {
     /// Returns how many accepted it, counting ourselves when we listen
     /// (others can then find it here).
     @discardableResult
-    public func publish(_ document: SignedObject) async -> Int {
+    public func publish(_ document: SignedObject, paths: Int = DHTNode.lookupPaths) async -> Int {
         guard let verified = Self.verify(document) else { return 0 }
         let key = NodeID(user: verified.user)
         let keptHere = accept(document) && listenPort != nil
-        let targets = await lookup(key, value: nil).closest
+        let targets = await lookup(key, value: nil, paths: paths).closest
         return await withTaskGroup(of: Bool.self) { group in
             for contact in targets {
                 group.addTask { [transport, listenPort] in
@@ -199,47 +241,62 @@ public actor DHTNode {
         }
     }
 
-    /// Iterative Kademlia lookup: ask the closest unasked nodes, `alpha` at a
-    /// time, until the `k` closest known have all answered. With `value`,
-    /// also collects records found along the way (from every responder, so
-    /// one stale or lying node can't hide a newer version).
-    func lookup(_ target: NodeID, value: NodeID?) async -> (closest: [DHTContact], records: [SignedObject]) {
-        var shortlist: [NodeID: DHTContact] = [:]
-        for contact in table.closest(to: target, count: Self.k) { shortlist[contact.id] = contact }
+    /// Iterative Kademlia lookup along `paths` disjoint paths (S/Kademlia):
+    /// the closest known nodes are dealt out among the paths, and each path
+    /// asks the closest unasked nodes on its own list, `alpha` at a time,
+    /// until its `k` closest have all answered. A node asked by one path is
+    /// never asked by another, so an attacker has to sit on every path to
+    /// hide or poison the result. With `value`, also collects records from
+    /// every responder (so one stale or lying node can't hide a newer version).
+    func lookup(_ target: NodeID, value: NodeID?, paths: Int = 1) async -> (closest: [DHTContact], records: [SignedObject]) {
+        let pathCount = max(1, paths)
+        var shortlists = Array(repeating: [NodeID: DHTContact](), count: pathCount)
+        for (index, contact) in table.closest(to: target, count: Self.k).enumerated() {
+            shortlists[index % pathCount][contact.id] = contact
+        }
         var asked: Set<NodeID> = [], answered: [DHTContact] = [], records: [SignedObject] = []
-        while true {
-            let closest = target.sortByDistance(shortlist.values).prefix(Self.k)
-            let batch = closest.filter { !asked.contains($0.id) }.prefix(Self.alpha)
-            if batch.isEmpty { break }
-            for contact in batch { asked.insert(contact.id) }
-            let request: DHTMessage = value.map { .findValue(key: $0, listenPort: listenPort) }
-                ?? .findNode(target: target, listenPort: listenPort)
-            let responses = await withTaskGroup(of: (DHTContact, DHTMessage?).self) { group in
-                for contact in batch {
-                    group.addTask { [transport] in (contact, try? await transport.send(request, to: contact)) }
-                }
-                var all: [(DHTContact, DHTMessage?)] = []
-                for await response in group { all.append(response) }
-                return all
-            }
-            for (contact, response) in responses {
-                let nodes: [DHTContact]
-                switch response {
-                case .nodes(let found, let observed)?:
-                    nodes = found
-                    if let observed { observedAddress = observed }
-                case .value(let record, let found)?:
-                    nodes = found
-                    records.append(record)
-                default:
-                    table.failed(contact)
-                    shortlist[contact.id] = nil
+        let request: DHTMessage = value.map { .findValue(key: $0, listenPort: listenPort) }
+            ?? .findNode(target: target, listenPort: listenPort)
+        var active = Set(0..<pathCount)
+        while !active.isEmpty {
+            for path in active.sorted() {
+                let closest = target.sortByDistance(shortlists[path].values).prefix(Self.k)
+                let batch = closest.filter { !asked.contains($0.id) }.prefix(Self.alpha)
+                if batch.isEmpty {
+                    active.remove(path)
                     continue
                 }
-                table.saw(contact)
-                answered.append(contact)
-                for node in nodes where node.key != key && shortlist[node.id] == nil && !asked.contains(node.id) {
-                    shortlist[node.id] = node
+                for contact in batch { asked.insert(contact.id) }
+                let responses = await withTaskGroup(of: (DHTContact, DHTMessage?).self) { group in
+                    for contact in batch {
+                        group.addTask { [transport] in (contact, try? await transport.send(request, to: contact)) }
+                    }
+                    var all: [(DHTContact, DHTMessage?)] = []
+                    for await response in group { all.append(response) }
+                    return all
+                }
+                for (contact, response) in responses {
+                    let nodes: [DHTContact]
+                    switch response {
+                    case .nodes(let found, let observed)?:
+                        nodes = found
+                        if let observed { observedAddress = observed }
+                    case .value(let record, let found)?:
+                        nodes = found
+                        records.append(record)
+                    default:
+                        table.failed(contact)
+                        shortlists[path][contact.id] = nil
+                        continue
+                    }
+                    see(contact)
+                    answered.append(contact)
+                    // Nodes another path has asked stay that path's; nodes
+                    // whose keys don't solve the puzzle aren't asked at all.
+                    for node in nodes.prefix(Self.k) where node.key != key && !asked.contains(node.id)
+                        && DHTPuzzle.isSolved(node.key, bits: puzzleBits) {
+                        shortlists[path][node.id] = shortlists[path][node.id] ?? node
+                    }
                 }
             }
         }

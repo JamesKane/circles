@@ -15,7 +15,7 @@ struct CommunityScreenTests {
     func lifecycle() async throws {
         let alice = try await Account.create(home: temporaryHome(), displayName: "Alice")
         let bob = try await Account.create(home: temporaryHome(), displayName: "Bob")
-        let listener = try await NoiseListener(host: "127.0.0.1", port: 0, handshake: await alice.makeHandshake(role: .responder))
+        let listener = try await alice.makeListener(host: "127.0.0.1", port: 0)
         let task = Task { try await listener.run { session in _ = try await alice.respond(over: session) } }
         defer { task.cancel() }
         try await alice.setDirectEndpoint(host: "127.0.0.1", port: listener.port)

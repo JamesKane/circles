@@ -2,7 +2,11 @@ import Testing
 import Foundation
 import Synchronization
 import Crypto
+#if canImport(Security)
+import Security
+#elseif canImport(_CryptoExtras)
 import _CryptoExtras
+#endif
 import CirclesCore
 import CirclesCrypto
 import CirclesNet
@@ -26,6 +30,56 @@ final class FakeHTTP: HTTPPoster, Sendable {
         requests.withLock { $0.append(Request(url: url, headers: headers, body: body)) }
         return respond(url)
     }
+}
+
+/// A 2048-bit RSA key for tests only, in PKCS#8 as Google issues them…
+let testRSAKey = """
+-----BEGIN PRIVATE KEY-----
+MIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQDYTwBLldTSkLwq
+VyW40Ahs2mUMpY5F4kWE5bU9UM00jkwnAlndQP9GOHXKk/fxbff8xoLfu3TO6KcJ
+sF/q429uOOaqU8V32v75PwCupoPb6m1ppgnpaX/g+SchlP7Yv1YZcQPVsIvyWV8S
+IwWWYeiGvKPxolSewBHLYkszn8GyecGIKxdLS84xWctVhDzr2Fk2YjwOG8myTfL/
+g40Bcmkug1+OGzAfPwszGaNo1XN0XnQ1AOWNdf6HXebDnEnNhGgR/24iS3+6HS4u
+PlUlaI9V/meRW+GuntBBp1O7b15C8u3zcttSCUeFqEspSu40vQAI8VjP0/QcNnvT
+U9bHP7IZAgMBAAECggEAD+K1ZdeqGpCwkPd3eLwmckATvbsG2NEGQ/1OsyMU/vAY
+XaEJknsshC6vT+JQCjYGSVUW1XGB4ZQqeEawtKJhU5nwLsAaN3Qo14st9KWb93Ge
++WxNPAwYbSA/JHM5yBc9Ln8jRfVCQdkYZ0+VIHcuSX7fF2bRihsW83XTigYIhp/R
+1XczArx1wGG8rz/6SDYgO9seVx0wm6GOePghTaD9q39V6GmmVxCn2tiJjJBukDzf
+KfaYuaN6lek7VRL4kYTe2nm1MKuTXV+rftMOwzIfKL7brMWDAXGANnVz3vX0WfhF
+U56ZSpsFf2LlXiu49LanB/fK+l7xIkInYTit9zWU1QKBgQD8eGk5OMDu9PEulpxT
+QUhQCSVAujpFdfnPVKszPDcGjhIxZPudyu4xRlMB5GohQSWkudKDB15j5Ny+dfff
+GNg+tAAz3Oa3FYkF+nN/yM59IaVZZdATe9oNenzfOCy4t+rvV3+yfW3LQ8TY/1WO
+CsqibJOFUr2cITiE7oi0tp+iGwKBgQDbVSrkFhTEEI4ANdroAeCzRujup/+Hs9YT
+QdFDEkmfxLeHNn9TULL9YB9iAP1RofBYZi8lZZUsCJWfUxrIL7qplo9+pwIrQi0+
+JKg6rH+QYGM+zgeJG5q02DRHES26BmWyxGCuUyDFsKkp4Ela0l1lZYmoLxAX+6sP
+xC9wJxhf2wKBgQDR4vx/IKpsPV9f/r+ZCxWly+SXafpVkp2J+naVEoMgRO3k+HGh
+nXnlpvQNB6ofWTyFNCJI4dBbtYC6KfJWGx5zCkt80jFPlWyjdrGcUwEuz9DZgCW6
+fOUq/WBgZh/vtJ5wOUqkxVeIex9j0ul6O4h3/VGqrb2J1ahaAr/NlGEjbwKBgQCX
+u5GSfNwczz8NUjSAcFwcah/Wio4yOO0OIWg9ODeKubIlbkQjRR6uPoM3b2vPv3Hg
+FcDj5CSQc9fegsVyW+KMU8YtXigX+Q4HgaCIBrGxFZ1S44E/DsO1/CQeTfoOSUKt
+q0EfGA8B9Dby62CT3hgSf2391aESll4+5//RXJp2JQKBgDJQttbRKmDMfyRo2sP/
+MmMUCr5z3YV+93zaaEcwvm8NoINjXjc68DBA5Gh4sZSp7DnLBwGLLlNgdVzN2UG7
+/e0E328qdmXOQiQPeInkgsnbaq9tsI/ZlDxlaXd3Og8rbicX52RAin1G5cMdflhd
+79ITKyor7dZ4Sfd49uTzvBdu
+-----END PRIVATE KEY-----
+"""
+/// …and the same key in PKCS#1, as converted by OpenSSL.
+let testRSAKeyPKCS1 = Data(base64Encoded: "MIIEpAIBAAKCAQEA2E8AS5XU0pC8KlcluNAIbNplDKWOReJFhOW1PVDNNI5MJwJZ3UD/Rjh1ypP38W33/MaC37t0zuinCbBf6uNvbjjmqlPFd9r++T8ArqaD2+ptaaYJ6Wl/4PknIZT+2L9WGXED1bCL8llfEiMFlmHohryj8aJUnsARy2JLM5/BsnnBiCsXS0vOMVnLVYQ869hZNmI8DhvJsk3y/4ONAXJpLoNfjhswHz8LMxmjaNVzdF50NQDljXX+h13mw5xJzYRoEf9uIkt/uh0uLj5VJWiPVf5nkVvhrp7QQadTu29eQvLt83LbUglHhahLKUruNL0ACPFYz9P0HDZ701PWxz+yGQIDAQABAoIBAA/itWXXqhqQsJD3d3i8JnJAE727BtjRBkP9TrMjFP7wGF2hCZJ7LIQur0/iUAo2BklVFtVxgeGUKnhGsLSiYVOZ8C7AGjd0KNeLLfSlm/dxnvlsTTwMGG0gPyRzOcgXPS5/I0X1QkHZGGdPlSB3Lkl+3xdm0YobFvN104oGCIaf0dV3MwK8dcBhvK8/+kg2IDvbHlcdMJuhjnj4IU2g/at/VehpplcQp9rYiYyQbpA83yn2mLmjepXpO1US+JGE3tp5tTCrk11fq37TDsMyHyi+26zFgwFxgDZ1c9719Fn4RVOemUqbBX9i5V4ruPS2pwf3yvpe8SJCJ2E4rfc1lNUCgYEA/HhpOTjA7vTxLpacU0FIUAklQLo6RXX5z1SrMzw3Bo4SMWT7ncruMUZTAeRqIUElpLnSgwdeY+TcvnX33xjYPrQAM9zmtxWJBfpzf8jOfSGlWWXQE3vaDXp83zgsuLfq71d/sn1ty0PE2P9VjgrKomyThVK9nCE4hO6ItLafohsCgYEA21Uq5BYUxBCOADXa6AHgs0bo7qf/h7PWE0HRQxJJn8S3hzZ/U1Cy/WAfYgD9UaHwWGYvJWWVLAiVn1MayC+6qZaPfqcCK0ItPiSoOqx/kGBjPs4HiRuatNg0RxEtugZlssRgrlMgxbCpKeBJWtJdZWWJqC8QF/urD8QvcCcYX9sCgYEA0eL8fyCqbD1fX/6/mQsVpcvkl2n6VZKdifp2lRKDIETt5PhxoZ155ab0DQeqH1k8hTQiSOHQW7WAuinyVhsecwpLfNIxT5Vso3axnFMBLs/Q2YAlunzlKv1gYGYf77SecDlKpMVXiHsfY9LpejuId/1Rqq29idWoWgK/zZRhI28CgYEAl7uRknzcHM8/DVI0gHBcHGof1oqOMjjtDiFoPTg3irmyJW5EI0Uerj6DN29rz79x4BXA4+QkkHPX3oLFclvijFPGLV4oF/kOB4GgiAaxsRWdUuOBPw7DtfwkHk36DklCratBHxgPAfQ28utgk94YEn9t/dWhEpZePuf/0VyadiUCgYAyULbW0SpgzH8kaNrD/zJjFAq+c92Ffvd82mhHML5vDaCDY143OvAwQORoeLGUqew5ywcBiy5TYHVczdlBu/3tBN9vKnZlzkIkD3iJ5ILJ22qvbbCP2ZQ8ZWl3dzoPK24nF+dkQIp9RuXDHX5YXe/SEysqK+3WeEn3ePbk87wXbg==")!
+
+/// Checks an RS256 signature with the platform's own RSA code.
+func verifyRS256(_ signature: Data, for data: Data, keyPEM: String) -> Bool {
+    #if canImport(Security)
+    let attributes: [CFString: Any] = [kSecAttrKeyType: kSecAttrKeyTypeRSA, kSecAttrKeyClass: kSecAttrKeyClassPrivate]
+    guard let key = SecKeyCreateWithData(testRSAKeyPKCS1 as CFData, attributes as CFDictionary, nil),
+          let publicKey = SecKeyCopyPublicKey(key)
+    else { return false }
+    return SecKeyVerifySignature(publicKey, .rsaSignatureMessagePKCS1v15SHA256, data as CFData, signature as CFData, nil)
+    #elseif canImport(_CryptoExtras)
+    guard let key = try? _RSA.Signing.PrivateKey(pemRepresentation: keyPEM) else { return false }
+    return key.publicKey.isValidSignature(_RSA.Signing.RSASignature(rawRepresentation: signature), for: data, padding: .insecurePKCS1v1_5)
+    #else
+    return false
+    #endif
 }
 
 func base64URLDecode(_ text: Substring) -> Data {
@@ -148,12 +202,20 @@ struct PushTests {
         }
     }
 
-    @Test("FCM: an OAuth token from an RS256 service-account assertion, then a data message")
+    @Test("the PKCS#1 key inside a PKCS#8 key is found (the Apple signing path), matching OpenSSL")
+    func pkcs8() throws {
+        let der = try #require(RSASigner.der(fromPEM: testRSAKey))
+        #expect(RSASigner.pkcs1(fromPKCS8: der).map { Data($0) } == testRSAKeyPKCS1)
+        #expect(RSASigner.pkcs1(fromPKCS8: Array(der.prefix(40))) == nil)
+        #expect(RSASigner.pkcs1(fromPKCS8: [0x30, 0x82]) == nil)
+    }
+
+    @Test("FCM: an OAuth token from an RS256 service-account assertion, then a data message",
+          .enabled(if: RSASigner.isAvailable))
     func fcm() async throws {
-        let key = try _RSA.Signing.PrivateKey(keySize: .bits2048)
         let keyFile = try JSONSerialization.data(withJSONObject: [
             "type": "service_account", "project_id": "circles-test", "client_email": "push@circles-test.iam.gserviceaccount.com",
-            "private_key": key.pemRepresentation, "token_uri": "https://oauth2.googleapis.com/token",
+            "private_key": testRSAKey, "token_uri": "https://oauth2.googleapis.com/token",
         ])
         let http = FakeHTTP { url in
             url.host == "oauth2.googleapis.com" ? (200, Array(#"{"access_token":"ya29.token","expires_in":3600}"#.utf8)) : (200, [])
@@ -170,8 +232,7 @@ struct PushTests {
         let claims = jsonObject(base64URLDecode(assertion[1]))
         #expect(claims["scope"] as? String == "https://www.googleapis.com/auth/firebase.messaging")
         #expect(claims["iss"] as? String == "push@circles-test.iam.gserviceaccount.com")
-        let signature = _RSA.Signing.RSASignature(rawRepresentation: base64URLDecode(assertion[2]))
-        #expect(key.publicKey.isValidSignature(signature, for: Data((assertion[0] + "." + assertion[1]).utf8), padding: .insecurePKCS1v1_5))
+        #expect(verifyRS256(base64URLDecode(assertion[2]), for: Data((assertion[0] + "." + assertion[1]).utf8), keyPEM: testRSAKey))
 
         #expect(requests[1].url.absoluteString == "https://fcm.googleapis.com/v1/projects/circles-test/messages:send")
         #expect(requests[1].headers["authorization"] == "Bearer ya29.token")

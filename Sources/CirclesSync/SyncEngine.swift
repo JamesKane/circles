@@ -9,6 +9,12 @@ public struct PeerInfo: Sendable {
     /// The certified device that connected, when the transport authenticated
     /// a static key (always, over Noise).
     public let device: DeviceCertificate?
+
+    public init(user: UserID, identity: VerifiedIdentity, device: DeviceCertificate?) {
+        self.user = user
+        self.identity = identity
+        self.device = device
+    }
 }
 
 /// Who a node will sync with and whose logs it wants.
@@ -67,6 +73,11 @@ public struct SyncEngine: Sendable {
     public var batchSize = 128
     /// The most media chunks to ask for in one session.
     public var maxBlobsPerSession = 1024
+    /// At most this many entries kept per author, across their devices, so
+    /// a contact can't fill our disk with their own log (docs/DESIGN.md §12).
+    public var maxEntriesPerAuthor = 250_000
+    /// At most this many media chunks listed by one entry (1 GiB at 256 KiB).
+    public var maxBlobsPerEntry = 4096
 
     public init(store: any LogStore, identityDocument: SignedObject, policy: SyncPolicy, now: @escaping @Sendable () -> UInt64) {
         self.store = store
@@ -274,12 +285,18 @@ public struct SyncEngine: Sendable {
         } catch {
             throw SyncError.verificationFailed(error)
         }
+        // A peer could present an old document that predates a revocation;
+        // judge it by the newest version we know.
+        var current = verified
+        if let stored = try await store.verifiedIdentity(for: claimed.user), stored.version > verified.version {
+            current = stored
+        }
         var device: DeviceCertificate?
         if let staticKey {
-            device = verified.device(withAgreementKey: staticKey, atMillis: now())
+            device = current.device(withAgreementKey: staticKey, atMillis: now())
             guard device != nil else { throw SyncError.peerNotAuthenticated }
         }
-        let peer = PeerInfo(user: verified.user, identity: verified, device: device)
+        let peer = PeerInfo(user: current.user, identity: current, device: device)
         guard await policy.isAllowed(peer) else { throw SyncError.peerNotAllowed(verified.user) }
         try await store.saveIdentityDocument(hello.identity, verified: verified)
         return peer
@@ -331,13 +348,24 @@ public struct SyncEngine: Sendable {
     private func ingest(_ entries: [SignedObject], author: VerifiedIdentity, report: inout SyncReport) async throws -> Int {
         var accepted = 0
         var failedDevices: Set<DeviceID> = []
+        var stored = try await store.frontier(author: author.user).sequences.values.reduce(0) { $0 + Int(min($1, UInt64(Int.max / 2))) }
         for signed in entries {
             guard let device = signed.signerDevice, !failedDevices.contains(device) else { continue }
+            guard stored < maxEntriesPerAuthor else {
+                report.rejected.append("entries for \(author.user): over the quota of \(maxEntriesPerAuthor)")
+                break
+            }
             let head = try await store.head(author: author.user, device: device)
             do {
                 let verified = try VerifiedLogEntry(verifying: signed, author: author, after: head)
+                guard (verified.entry.blobs?.count ?? 0) <= maxBlobsPerEntry else {
+                    report.rejected.append("entry for \(author.user) lists too many media chunks")
+                    failedDevices.insert(device) // the log can't continue past it
+                    continue
+                }
                 try await store.append(verified)
                 accepted += 1
+                stored += 1
             } catch SyncError.outOfSequence(_, let expected, let got) where got < expected {
                 continue // already have it
             } catch {

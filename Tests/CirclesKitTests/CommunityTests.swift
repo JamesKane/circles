@@ -8,7 +8,7 @@ import CirclesSync
 
 /// Serves `community` from its owner over real TCP.
 func servingCommunity<R>(_ owner: Account, _ community: UserID, _ body: (Int) async throws -> R) async throws -> R {
-    let listener = try await NoiseListener(host: "127.0.0.1", port: 0, handshake: await owner.makeHandshake(role: .responder))
+    let listener = try await owner.makeListener(host: "127.0.0.1", port: 0)
     let engine = try await owner.communityEngine(community)
     let task = Task { try await listener.run { session in _ = try await engine.run(over: session) } }
     defer { task.cancel() }
@@ -122,6 +122,45 @@ struct CommunityTests {
         #expect(try await eve.communities().first?.role == .pending)
     }
 
+    @Test("a join request is refused once stale, so it can't be replayed")
+    func staleJoinRequest() async throws {
+        let alice = try await Account.create(home: temporaryHome(), displayName: "Alice")
+        let bob = try await Account.create(home: temporaryHome(), displayName: "Bob")
+        let community = try await alice.createCommunity(name: "Open", visibility: .public, joinPolicy: .open)
+        try await bob.joinCommunity(invite: try await alice.communityInvite(community))
+        let old = JoinRequest(community: community, user: bob.user, keyPackage: nil, invite: nil,
+                              createdMillis: wallClockMillis() - Account.joinRequestLifetimeMillis - 1)
+        let signed = try await bob.signForTesting(old, label: .communityJoin)
+        let peer = PeerInfo(user: bob.user, identity: try VerifiedIdentity(verifying: await bob.identityDocument, for: bob.user), device: nil)
+        await #expect(throws: CommunityError.staleRequest) {
+            try await alice.receiveJoinRequest(signed, from: peer, for: community)
+        }
+        #expect(try await alice.communityMembers(community).map(\.user) == [alice.user])
+    }
+
+    @Test("join requests to open and approval communities must carry proof of work")
+    func postage() async throws {
+        let alice = try await Account.create(home: temporaryHome(), displayName: "Alice")
+        let bob = try await Account.create(home: temporaryHome(), displayName: "Bob")
+        let community = try await alice.createCommunity(name: "Open", visibility: .public, joinPolicy: .open, postageBits: 10)
+        let peer = PeerInfo(user: bob.user, identity: try VerifiedIdentity(verifying: await bob.identityDocument, for: bob.user), device: nil)
+        var request = JoinRequest(community: community, user: bob.user, keyPackage: nil, invite: nil, createdMillis: wallClockMillis())
+        await #expect(throws: CommunityError.postageRequired) {
+            try await alice.receiveJoinRequest(try await bob.signForTesting(request, label: .communityJoin), from: peer, for: community)
+        }
+        // Too little work fails too.
+        request.postage = Postage.stamp(try request.postagePayload, bits: 2)
+        if !Postage.isValid(try request.postagePayload, nonce: request.postage!, bits: 10) {
+            await #expect(throws: CommunityError.postageRequired) {
+                try await alice.receiveJoinRequest(try await bob.signForTesting(request, label: .communityJoin), from: peer, for: community)
+            }
+        }
+        // The real flow stamps, and gets in.
+        try await bob.joinCommunity(invite: try await alice.communityInvite(community))
+        try await round(alice, community, bob)
+        #expect(try await bob.communities().first?.role == .member)
+    }
+
     @Test("the owner can remove an item; non-members can't post")
     func moderation() async throws {
         let alice = try await Account.create(home: temporaryHome(), displayName: "Alice")
@@ -164,7 +203,7 @@ struct CommunityNodeTests {
     func oneListener() async throws {
         let alice = try await Account.create(home: temporaryHome(), displayName: "Alice")
         let bob = try await Account.create(home: temporaryHome(), displayName: "Bob")
-        let listener = try await NoiseListener(host: "127.0.0.1", port: 0, handshake: await alice.makeHandshake(role: .responder))
+        let listener = try await alice.makeListener(host: "127.0.0.1", port: 0)
         let task = Task { try await listener.run { session in _ = try await alice.respond(over: session) } }
         defer { task.cancel() }
 
@@ -196,7 +235,7 @@ struct CommunityNodeTests {
     func unknownTarget() async throws {
         let alice = try await Account.create(home: temporaryHome(), displayName: "Alice")
         let bob = try await Account.create(home: temporaryHome(), displayName: "Bob")
-        let listener = try await NoiseListener(host: "127.0.0.1", port: 0, handshake: await alice.makeHandshake(role: .responder))
+        let listener = try await alice.makeListener(host: "127.0.0.1", port: 0)
         let task = Task { try await listener.run { session in _ = try await alice.respond(over: session) } }
         defer { task.cancel() }
         await #expect(throws: (any Error).self) {
@@ -213,7 +252,7 @@ struct CommunityPodTests {
         let bob = try await Account.create(home: temporaryHome(), displayName: "Bob")
         let carol = try await Account.create(home: temporaryHome(), displayName: "Carol")
         let (pod, _) = try await PodNode.create(home: temporaryHome(), host: "127.0.0.1", port: 0)
-        let listener = try await NoiseListener(host: "127.0.0.1", port: 0, handshake: await pod.makeHandshake(role: .responder))
+        let listener = try await pod.makeListener(host: "127.0.0.1", port: 0)
         try await pod.setAddress(host: "127.0.0.1", port: UInt16(listener.port))
         _ = try await pod.pair(try await alice.addPod(await pod.pairingCode))
         let podTask = Task { try await listener.run { session in _ = try await pod.respond(over: session) } }
@@ -248,7 +287,7 @@ struct CommunityPodTests {
         let alice = try await Account.create(home: temporaryHome(), displayName: "Alice")
         let mallory = try await Account.create(home: temporaryHome(), displayName: "Mallory")
         let (pod, _) = try await PodNode.create(home: temporaryHome(), host: "127.0.0.1", port: 0)
-        let listener = try await NoiseListener(host: "127.0.0.1", port: 0, handshake: await pod.makeHandshake(role: .responder))
+        let listener = try await pod.makeListener(host: "127.0.0.1", port: 0)
         try await pod.setAddress(host: "127.0.0.1", port: UInt16(listener.port))
         _ = try await pod.pair(try await alice.addPod(await pod.pairingCode))
         let podTask = Task { try await listener.run { session in _ = try await pod.respond(over: session) } }

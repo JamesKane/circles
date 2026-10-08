@@ -21,11 +21,13 @@ let package = Package(
         .library(name: "CirclesMLS", targets: ["CirclesMLS"]),
         .library(name: "CirclesDHT", targets: ["CirclesDHT"]),
         .library(name: "CirclesPush", targets: ["CirclesPush"]),
+        .library(name: "CirclesFuzz", targets: ["CirclesFuzz"]),
         .library(name: "CirclesPresentation", targets: ["CirclesPresentation"]),
         .executable(name: "circles", targets: ["circles-cli"]),
         .executable(name: "circles-pod", targets: ["circles-pod"]),
         .executable(name: "circles-relay", targets: ["circles-relay"]),
         .executable(name: "circles-push", targets: ["circles-push"]),
+        .executable(name: "circles-sim", targets: ["circles-sim"]),
     ],
     dependencies: [
         .package(url: "https://github.com/apple/swift-crypto.git", "4.0.0"..<"6.0.0"),
@@ -75,10 +77,15 @@ let package = Package(
             swiftSettings: swiftSettings
         ),
         .target(
+            name: "CirclesFuzz",
+            dependencies: ["CirclesCore", "CirclesCrypto", "CirclesSync", "CirclesDHT", "CirclesPush", "CirclesMLS", "CirclesKit"],
+            swiftSettings: swiftSettings
+        ),
+        .target(
             name: "CirclesPush",
             dependencies: ["CirclesCore", "CirclesCrypto", "CirclesSync", "CirclesNet", "CirclesStorage",
                            .product(name: "Crypto", package: "swift-crypto"),
-                           .product(name: "_CryptoExtras", package: "swift-crypto")],
+                           .product(name: "_CryptoExtras", package: "swift-crypto", condition: .when(platforms: [.linux, .android]))],
             swiftSettings: swiftSettings
         ),
         .target(
@@ -141,6 +148,12 @@ let package = Package(
                            .product(name: "ArgumentParser", package: "swift-argument-parser")],
             swiftSettings: swiftSettings
         ),
+        .executableTarget(
+            name: "circles-sim",
+            dependencies: ["CirclesCore", "CirclesCrypto", "CirclesDHT",
+                           .product(name: "ArgumentParser", package: "swift-argument-parser")],
+            swiftSettings: swiftSettings
+        ),
         .testTarget(
             name: "CirclesCoreTests",
             dependencies: ["CirclesCore"],
@@ -172,9 +185,14 @@ let package = Package(
             swiftSettings: swiftSettings
         ),
         .testTarget(
+            name: "CirclesFuzzTests",
+            dependencies: ["CirclesFuzz"],
+            swiftSettings: swiftSettings
+        ),
+        .testTarget(
             name: "CirclesPushTests",
             dependencies: ["CirclesPush", "CirclesNet", .product(name: "Crypto", package: "swift-crypto"),
-                           .product(name: "_CryptoExtras", package: "swift-crypto")],
+                           .product(name: "_CryptoExtras", package: "swift-crypto", condition: .when(platforms: [.linux, .android]))],
             swiftSettings: swiftSettings
         ),
         .testTarget(

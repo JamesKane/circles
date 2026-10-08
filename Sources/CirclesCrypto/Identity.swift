@@ -118,11 +118,15 @@ public struct PodEndpoint: Sendable, Hashable, Codable {
     public var device: DeviceID
     public var host: String
     public var port: UInt16
+    /// The pod's DHT key, so contacts can join the DHT through it. Absent
+    /// for pods paired before M7.
+    public var dhtKey: AgreementPublicKey?
 
-    public init(device: DeviceID, host: String, port: UInt16) {
+    public init(device: DeviceID, host: String, port: UInt16, dhtKey: AgreementPublicKey? = nil) {
         self.device = device
         self.host = host
         self.port = port
+        self.dhtKey = dhtKey
     }
 }
 
@@ -156,10 +160,16 @@ public struct DeviceRevocation: Sendable, Hashable, Codable {
     public var device: DeviceID
     /// Objects the device signed at or after this time are rejected.
     public var revokedAtMillis: UInt64
+    /// The last entry of the device's log that stands. Later entries are
+    /// rejected whatever time they claim, so a stolen device can't backdate
+    /// new ones to before `revokedAtMillis` (docs/DESIGN.md §12). Absent:
+    /// only the time applies (added in M7).
+    public var lastSequence: UInt64?
 
-    public init(device: DeviceID, revokedAtMillis: UInt64) {
+    public init(device: DeviceID, revokedAtMillis: UInt64, lastSequence: UInt64? = nil) {
         self.device = device
         self.revokedAtMillis = revokedAtMillis
+        self.lastSequence = lastSequence
     }
 }
 
@@ -204,6 +214,8 @@ public struct VerifiedIdentity: Sendable {
     public let version: UInt64
     public let certificates: [DeviceID: DeviceCertificate]
     public let revocations: [DeviceID: UInt64]
+    /// For revoked devices: the last log entry that stands.
+    public let lastSequences: [DeviceID: UInt64]
     public let endpoints: Endpoints
     /// The document itself, for publishing a new version.
     public let document: IdentityDocument
@@ -232,6 +244,10 @@ public struct VerifiedIdentity: Sendable {
         self.certificates = certificates
         revocations = document.revocations.reduce(into: [:]) { result, revocation in
             result[revocation.device] = min(result[revocation.device] ?? .max, revocation.revokedAtMillis)
+        }
+        lastSequences = document.revocations.reduce(into: [:]) { result, revocation in
+            guard let last = revocation.lastSequence else { return }
+            result[revocation.device] = min(result[revocation.device] ?? .max, last)
         }
     }
 

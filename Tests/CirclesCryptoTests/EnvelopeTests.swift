@@ -36,6 +36,20 @@ struct EnvelopeTests {
         #expect(try new.open(keyring: keyring(epoch0, schedule.current)) == [2])
     }
 
+    @Test("envelopes with more than 256 wraps are neither sealed nor opened, so trial decryption stays cheap")
+    func wrapLimit() throws {
+        let devices = (0...Envelope.maxWraps).map { _ in DeviceKeyPair().agreementPublicKey }
+        #expect(throws: CryptoError.audienceTooLarge) {
+            try Envelope.seal([1], author: Self.alice, to: EnvelopeAudience(devices: devices))
+        }
+        let me = DeviceKeyPair()
+        let real = try Envelope.seal([1], author: Self.alice, to: EnvelopeAudience(devices: [me.agreementPublicKey]))
+        let padded = Envelope(version: real.version, author: real.author, nonceBytes: real.nonce, ciphertext: real.ciphertext,
+                              audienceWraps: [], deviceWraps: Array(repeating: real.deviceWraps[0], count: Envelope.maxWraps + 1))
+        #expect(throws: CryptoError.audienceTooLarge) { try padded.open(keyring: AudienceKeyring(), device: me) }
+        #expect(try real.open(keyring: AudienceKeyring(), device: me) == [1])
+    }
+
     @Test("individually named devices open by trial decryption")
     func deviceAudience() throws {
         let bobPhone = DeviceKeyPair(), bobLaptop = DeviceKeyPair(), carol = DeviceKeyPair()
@@ -153,5 +167,19 @@ struct EnvelopeTests {
         let payload = try alice.verified.verify(signed, label: .post, atMillis: claimed.created.millis)
         #expect(try CBORDecoder().decode(Post.self, from: payload) == post)
         #expect(claimed.author == envelope.author)
+    }
+}
+
+@Suite("Postage")
+struct PostageTests {
+    @Test("a stamp proves the work, for that payload only")
+    func stamp() {
+        let payload = Array("join me".utf8)
+        let nonce = Postage.stamp(payload, bits: 12)
+        #expect(Postage.isValid(payload, nonce: nonce, bits: 12))
+        #expect(!Postage.isValid(Array("join you".utf8), nonce: nonce, bits: 12) || Postage.isValid(Array("join you".utf8), nonce: 0, bits: 0))
+        #expect(Postage.isValid(payload, nonce: 12345, bits: 0))
+        // Some nonce below the found one fails (it was the first that passed).
+        if nonce > 0 { #expect(!Postage.isValid(payload, nonce: nonce - 1, bits: 12)) }
     }
 }

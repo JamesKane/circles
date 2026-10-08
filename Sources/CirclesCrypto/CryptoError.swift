@@ -13,6 +13,8 @@ public enum CryptoError: Error, Sendable, Equatable {
     case identityMismatch
     /// None of the envelope's wrapped keys can be opened with the keys held.
     case notARecipient
+    /// An envelope with more wraps than `Envelope.maxWraps`.
+    case audienceTooLarge
     case decryptionFailed
     case malformedPadding
     case unsupportedVersion(UInt64)
