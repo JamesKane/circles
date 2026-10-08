@@ -114,6 +114,26 @@ enum Snapshot {
                   "pressing +1 toggled the post's +1")
             await save(app, "7-after-interactions", in: directory)
         }
+
+        // Deleting our own post: the confirmation, cancelling it, then deleting.
+        if let mine = app.streamModel?.state.cards.first(where: { $0.canDelete }), let row = app.streamPage?.row(for: mine.id) {
+            if let dialog = await row.pressDelete() {
+                await save(app, "8-delete-confirmation", in: directory)
+                adw_dialog_close(g(dialog)) // Cancel
+                try? await Task.sleep(for: .milliseconds(300))
+                check(app.streamModel?.state.cards.contains { $0.id == mine.id } == true, "cancelling Delete kept the post")
+            } else {
+                check(false, "the Delete button opened a confirmation")
+            }
+            if let account = app.account {
+                let post = PostScreenModel(post: mine.reference, account: account)
+                await post.perform(.load)
+                await post.perform(.delete)
+                app.streamModel?.send(.refresh)
+                check(await waitFor { app.streamModel?.state.cards.contains { $0.id == mine.id } == false },
+                      "deleting the post removed it from the Stream")
+            }
+        }
     }
 
     // MARK: Helpers

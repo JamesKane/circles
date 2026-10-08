@@ -166,6 +166,7 @@ public enum AccountError: Error, Sendable, Equatable {
     case unknownPost
     case resharingNotAllowed
     case commentsDisabled
+    case notYours
 }
 
 import Foundation

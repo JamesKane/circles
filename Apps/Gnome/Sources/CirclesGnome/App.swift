@@ -122,7 +122,7 @@ final class AppController {
 
     func open(_ post: ObjectRef) {
         guard let account else { return }
-        let page = PostPage(model: PostScreenModel(post: post, account: account), media: MediaLoader(account: account))
+        let page = PostPage(model: PostScreenModel(post: post, account: account), media: MediaLoader(account: account), app: self)
         pages.append(page)
         adw_navigation_view_push(g(navigation), g(page.widget))
     }

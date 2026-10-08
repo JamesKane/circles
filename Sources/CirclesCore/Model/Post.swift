@@ -84,3 +84,19 @@ public struct Reaction: Sendable, Hashable, Codable {
         self.retracted = retracted ? true : nil
     }
 }
+
+/// The author's request that readers stop showing one of their posts, or a
+/// comment in one of their threads (docs/DESIGN.md §3: deletion is a request,
+/// not a guarantee). Readers honor it only from the post's author.
+public struct Deletion: Sendable, Hashable, Codable {
+    public var author: UserID
+    /// The post's ID, or the ID of the comment's own signed object.
+    public var target: ContentID
+    public var created: HLCTimestamp
+
+    public init(author: UserID, target: ContentID, created: HLCTimestamp) {
+        self.author = author
+        self.target = target
+        self.created = created
+    }
+}

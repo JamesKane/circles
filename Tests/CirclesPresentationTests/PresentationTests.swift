@@ -166,3 +166,33 @@ struct ScreenModelTests {
         #expect(navigation.current == .stream)
     }
 }
+
+@Suite("Deleting through screen models")
+@MainActor
+struct DeletingScreenTests {
+    @Test("only the author can delete, and removing a comment updates the thread")
+    func deleting() async throws {
+        let (alice, bob) = try await friends()
+        let id = try await alice.post(RichText(plain: "draft thought"), to: .everyone)
+        try await sync(bob, with: alice)
+        let bobsView = PostScreenModel(post: ObjectRef(author: alice.user, id: id), account: bob)
+        await bobsView.perform(.load)
+        #expect(bobsView.state.card?.canDelete == false)
+        await bobsView.perform(.editDraft("hmm"))
+        await bobsView.perform(.submitComment)
+        try await sync(alice, with: bob)
+
+        let alicesView = PostScreenModel(post: ObjectRef(author: alice.user, id: id), account: alice)
+        await alicesView.perform(.load)
+        let comment = try #require(alicesView.state.card?.comments.first)
+        #expect(alicesView.state.card?.canDelete == true && comment.canRemove)
+        await alicesView.perform(.removeComment(comment.id))
+        #expect(alicesView.state.card?.comments.isEmpty == true)
+
+        await alicesView.perform(.delete)
+        #expect(alicesView.state.deleted && alicesView.state.card == nil)
+        let stream = StreamScreenModel(account: alice)
+        await stream.perform(.refresh)
+        #expect(stream.state.cards.isEmpty)
+    }
+}

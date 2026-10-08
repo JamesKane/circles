@@ -22,6 +22,8 @@ public enum StreamIntent: Sendable {
     case sync
     case selectFilter(StreamFilter)
     case setPlusOne(ObjectRef, Bool)
+    /// Deletes one of our posts.
+    case delete(ObjectRef)
 }
 
 @MainActor
@@ -50,6 +52,9 @@ public final class StreamScreenModel: ScreenModel {
         case .setPlusOne(let post, let on):
             await run { try await self.account.setPlusOne(on, on: post) }
             await reload()
+        case .delete(let post):
+            await run { try await self.account.delete(post: post.id) }
+            await reload()
         }
     }
 
@@ -65,7 +70,7 @@ public final class StreamScreenModel: ScreenModel {
                 visible = items.filter { members.contains($0.author) }
             }
             let date = now()
-            state.cards = visible.map { PostCard($0, now: date) }
+            state.cards = visible.map { PostCard($0, now: date, me: account.user) }
             state.phase = .idle
         } catch {
             state.phase = .failed(String(describing: error))

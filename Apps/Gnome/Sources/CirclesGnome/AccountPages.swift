@@ -22,6 +22,9 @@ func cardRow(_ children: [Widget]) -> Widget {
 
 // MARK: - Alert dialogs
 
+/// The most recently presented alert (snapshot self-test).
+@MainActor var lastAlert: Widget?
+
 /// A libadwaita alert with Cancel and one action.
 @MainActor
 @discardableResult
@@ -39,6 +42,7 @@ func confirm(on parent: Widget, heading: String, body: String, action: String, d
         onConfirm()
     }
     adw_dialog_present(g(dialog), parent)
+    lastAlert = g(dialog)
     return g(dialog)
 }
 
@@ -104,13 +108,8 @@ final class PeoplePage {
     /// press and emits "clicked" a moment later, so this waits for it.
     func pressRemove(_ user: UserID) async -> Widget? {
         guard let button = removeButtons[user] else { return nil }
-        lastDialog = nil
-        _ = gtk_widget_activate(button)
-        for _ in 0..<30 where lastDialog == nil { try? await Task.sleep(for: .milliseconds(50)) }
-        return lastDialog
+        return await pressForAlert(button)
     }
-
-    private var lastDialog: Widget?
 
     /// Pastes an invite and presses Add (snapshot self-test).
     func paste(invite: String) {
@@ -168,7 +167,7 @@ final class PeoplePage {
                 }
             }
             let remove = UI.button(icon: "user-trash-symbolic", classes: ["flat"], tooltip: "Remove") { [unowned self] in
-                lastDialog = confirm(on: window, heading: "Remove \(person.name)?",
+                confirm(on: window, heading: "Remove \(person.name)?",
                         body: "They'll be taken out of all your circles and won't see anything you post from now on. They keep what they've already seen.",
                         action: "Remove", destructive: true) { [model] in
                     model.send(.remove(person.user))
@@ -297,4 +296,14 @@ final class SettingsPage {
         if net.activity.isEmpty { UI.append(activity, UI.label("Nothing yet.", classes: ["dim-label", "caption"])) }
         for line in net.activity.prefix(15) { UI.append(activity, UI.label(line, classes: ["caption", "dim-label"], wrap: true)) }
     }
+}
+
+/// Activates a button and waits for the alert it opens. GTK 4 animates an
+/// activated button's press and emits "clicked" a moment later.
+@MainActor
+func pressForAlert(_ button: Widget) async -> Widget? {
+    lastAlert = nil
+    _ = gtk_widget_activate(button)
+    for _ in 0..<30 where lastAlert == nil { try? await Task.sleep(for: .milliseconds(50)) }
+    return lastAlert
 }

@@ -360,6 +360,11 @@ Edits are new objects that supersede earlier ones (`supersedes: CID`). Deletes a
 - **+1s:** the latest reaction per contributor wins, and `retracted` withdraws one.
 - **Reshares:** only of public posts that allow resharing. The reshare embeds the original signed post and its author's identity document (`ContentItem.embedded`), so the resharer's audience can verify it without knowing the original author.
   - *Deviation from Google+:* resharing limited posts isn't supported. It would mean re-encrypting someone else's content to a new audience.
+- **Deleting (added on the `gnome/polish` branch):**
+  - An author withdraws a post, or removes a comment from one of their threads, with a signed `Deletion` (`ContentKind.deletion`, label `circles/v1/deletion`). It's published **to the post's own audience**, so outsiders don't learn the post existed.
+  - Readers honor deletions **only from the post's author**, and hide the post or comment once they sync. A removed comment doesn't come back as "pending" for its writer either.
+  - As §3 says, this is a request: anyone who already had the content may have kept it.
+  - Commenters can't yet delete their own comments, which would need the author to republish the removal.
 - **Limitation:** only the author's contacts can comment, because the author reads contributions from the logs it syncs. Comments from non-contacts on public posts need a delivery path, such as through the author's pod, that accepts strangers with anti-abuse measures (§7.5).
 
 ### 9.5 Ordering

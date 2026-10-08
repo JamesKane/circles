@@ -20,8 +20,10 @@ public struct PostCard: Sendable, Equatable, Identifiable {
     public var comments: [CommentRow]
     public var canComment: Bool
     public var canReshare: Bool
+    /// Our own post: we can delete it, and remove comments from its thread.
+    public var canDelete: Bool
 
-    init(_ item: StreamItem, now: Date) {
+    init(_ item: StreamItem, now: Date, me: UserID) {
         id = item.id
         reference = item.reference
         authorName = item.authorName
@@ -34,8 +36,10 @@ public struct PostCard: Sendable, Equatable, Identifiable {
         reshared = item.reshared.map { ResharedCard($0, now: now) }
         plusOnes = item.plusOnes
         plusOnedByMe = item.plusOnedByMe
-        comments = item.comments.map { CommentRow($0, now: now) }
+        let ours = item.author == me
+        comments = item.comments.map { CommentRow($0, now: now, removable: ours && !$0.pending) }
         canComment = item.commentsEnabled
+        canDelete = ours
         // Only public posts can be reshared (docs/DESIGN.md §9.4).
         canReshare = item.resharesEnabled && item.audience == .everyone
     }
@@ -48,13 +52,16 @@ public struct CommentRow: Sendable, Equatable, Identifiable {
     public var body: RichText
     /// Shown with `DesignToken.pending` and `Strings.pending`.
     public var pending: Bool
+    /// The thread is ours, so we can remove this comment (moderation).
+    public var canRemove: Bool
 
-    init(_ comment: StreamComment, now: Date) {
+    init(_ comment: StreamComment, now: Date, removable: Bool) {
         id = comment.id
         authorName = comment.authorName
         timestamp = Format.relativeTime(comment.created, now: now)
         body = comment.body
         pending = comment.pending
+        canRemove = removable
     }
 }
 

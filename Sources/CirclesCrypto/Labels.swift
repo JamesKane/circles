@@ -21,6 +21,7 @@ public struct SignatureLabel: Sendable, Hashable, RawRepresentable {
     public static let logEntry = SignatureLabel(rawValue: "circles/v1/log-entry")
     public static let podConfig = SignatureLabel(rawValue: "circles/v1/pod-config")
     public static let threadItem = SignatureLabel(rawValue: "circles/v1/thread-item")
+    public static let deletion = SignatureLabel(rawValue: "circles/v1/deletion")
     public static let post = SignatureLabel(rawValue: "circles/v1/post")
     public static let comment = SignatureLabel(rawValue: "circles/v1/comment")
     public static let reaction = SignatureLabel(rawValue: "circles/v1/reaction")

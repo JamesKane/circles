@@ -21,6 +21,8 @@ final class PostView {
     private var commentsButton: Widget!
     private let commentsContent = adw_button_content_new()!
     private var reshare: Widget!
+    private var delete: Widget!
+    private let onRemoveComment: @MainActor (CommentRow) -> Void
     private var card: PostCard?
     private var loadedAttachments: [ContentID] = []
 
@@ -30,9 +32,12 @@ final class PostView {
     init(media: MediaLoader, showThread: Bool,
          onPlusOne: @escaping @MainActor (PostCard) -> Void,
          onOpen: @escaping @MainActor (PostCard) -> Void,
-         onReshare: @escaping @MainActor (PostCard) -> Void) {
+         onReshare: @escaping @MainActor (PostCard) -> Void,
+         onDelete: @escaping @MainActor (PostCard) -> Void,
+         onRemoveComment: @escaping @MainActor (CommentRow) -> Void = { _ in }) {
         self.media = media
         self.showThread = showThread
+        self.onRemoveComment = onRemoveComment
         avatar = adw_avatar_new(40, "", 1)!
         gtk_label_set_selectable(g(body), 1)
         root = UI.vbox(spacing: 10, classes: ["card", "post-card"])
@@ -47,9 +52,17 @@ final class PostView {
         reshare = UI.button(icon: "media-playlist-repeat-symbolic", classes: ["flat"], tooltip: "Reshare publicly") { [unowned self] in
             if let card { onReshare(card) }
         }
-        let actions = UI.hbox(spacing: 6, [plusOne, commentsButton, reshare])
+        delete = UI.button(icon: "user-trash-symbolic", classes: ["flat"], tooltip: "Delete post") { [unowned self] in
+            if let card { onDelete(card) }
+        }
+        let spacer = UI.hbox()
+        UI.expand(spacer)
+        let actions = UI.hbox(spacing: 6, [plusOne, commentsButton, reshare, spacer, delete])
         for child in [header, body, reshared, attachments, comments, actions] { UI.append(root, child) }
     }
+
+    /// Presses Delete and returns the confirmation it opens (self-test).
+    func pressDelete() async -> Widget? { await pressForAlert(delete) }
 
     /// Activates the +1 button as a click would (snapshot self-test).
     func pressPlusOne() { _ = gtk_widget_activate(plusOne) }
@@ -90,6 +103,7 @@ final class PostView {
         }
         adw_button_content_set_label(g(commentsContent), card.comments.isEmpty ? "Comment" : "\(card.comments.count)")
         UI.setVisible(reshare, card.canReshare)
+        UI.setVisible(delete, card.canDelete)
 
         UI.removeAllChildren(comments)
         if showThread {
@@ -103,7 +117,14 @@ final class PostView {
         let name = UI.label(comment.authorName + "  ·  " + comment.timestamp, classes: ["caption", "heading"])
         let text = UI.label("", wrap: true)
         UI.setMarkup(text, Style.markup(comment.body))
-        let row = UI.vbox(spacing: 2, classes: ["comment"], [name, text])
+        let header = UI.hbox(spacing: 6, [name])
+        UI.expand(name)
+        if comment.canRemove {
+            UI.append(header, UI.button(icon: "user-trash-symbolic", classes: ["flat", "circular"], tooltip: "Remove comment") { [onRemoveComment] in
+                onRemoveComment(comment)
+            })
+        }
+        let row = UI.vbox(spacing: 2, classes: ["comment"], [header, text])
         if comment.pending {
             UI.append(row, UI.label(Strings.pending, classes: ["caption"] + Style.classes(for: .pending)))
         }
