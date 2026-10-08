@@ -86,7 +86,7 @@ final class AppController {
     @discardableResult
     func showPeople() -> PeoplePage? {
         guard let account else { return nil }
-        let page = PeoplePage(model: PeopleScreenModel(account: account, services: GnomeServices(window: window)))
+        let page = PeoplePage(model: PeopleScreenModel(account: account, services: GnomeServices(window: window)), window: window)
         pages.append(page)
         adw_navigation_view_push(g(navigation), g(page.widget))
         return page

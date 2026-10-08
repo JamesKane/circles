@@ -147,6 +147,32 @@ public actor Account {
         return contact
     }
 
+    /// Changes the local name for a contact. Names are petnames: they never
+    /// leave this device.
+    public func renameContact(_ user: UserID, to name: String) throws {
+        try reload()
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, let index = contacts.firstIndex(where: { $0.user == user }) else {
+            throw AccountError.unknownContact(name)
+        }
+        contacts[index].name = trimmed
+        try files.save(contacts, to: files.contacts)
+    }
+
+    /// Removes a contact. They're taken out of every circle first, which
+    /// rotates those circles' keys, so they can't read anything posted from
+    /// now on. They keep what they already received (docs/DESIGN.md §8.2).
+    public func removeContact(_ user: UserID) async throws {
+        try reload()
+        guard contacts.contains(where: { $0.user == user }) else { throw AccountError.unknownContact("\(user)") }
+        for circle in circles where circle.members.contains(user) {
+            try await removeFromCircle(circle.name, members: [user])
+        }
+        try reload()
+        contacts.removeAll { $0.user == user }
+        try files.save(contacts, to: files.contacts)
+    }
+
     public func contact(named name: String) throws -> Contact {
         guard let contact = contacts.first(where: { $0.name.caseInsensitiveCompare(name) == .orderedSame }) else {
             throw AccountError.unknownContact(name)

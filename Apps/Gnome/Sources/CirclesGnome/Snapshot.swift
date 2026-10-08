@@ -47,6 +47,14 @@ enum Snapshot {
             people.paste(invite: invite)
             check(await waitFor { people.model.state.people.map(\.name) == ["Bob Marley"] }, "pasting Bob's invite on the People page added him")
             await save(app, "2-people", in: directory)
+            if let dialog = await people.pressRemove(bob.user) {
+                await save(app, "2b-remove-confirmation", in: directory)
+                adw_dialog_close(g(dialog)) // Cancel
+                try? await Task.sleep(for: .milliseconds(300))
+                check(people.model.state.people.count == 1, "cancelling the Remove confirmation kept Bob")
+            } else {
+                check(false, "the Remove button opened a confirmation")
+            }
             app.back()
         }
 

@@ -122,3 +122,40 @@ struct SocialTests {
         #expect(reshare.reshared?.authorName == "Alice")
     }
 }
+
+@Suite("Managing contacts")
+struct ContactManagementTests {
+    @Test("renaming changes only our local name")
+    func rename() async throws {
+        let alice = try await Account.create(home: temporaryHome(), displayName: "Alice")
+        let bob = try await Account.create(home: temporaryHome(), displayName: "Bob")
+        try await befriend(alice, bob)
+        try await alice.renameContact(bob.user, to: "  Bobby  ")
+        #expect(await alice.contacts.map(\.name) == ["Bobby"])
+        #expect(await alice.name(of: bob.user) == "Bobby")
+        await #expect(throws: AccountError.self) { try await alice.renameContact(bob.user, to: " ") }
+    }
+
+    @Test("removing a contact takes them out of circles, so they can't read new posts")
+    func remove() async throws {
+        let alice = try await Account.create(home: temporaryHome(), displayName: "Alice")
+        let bob = try await Account.create(home: temporaryHome(), displayName: "Bob")
+        try await befriend(alice, bob)
+        try await alice.createCircle("Friends")
+        try await alice.addToCircle("Friends", members: [bob.user])
+        try await alice.post(RichText(plain: "before"), to: .circles(["Friends"]))
+        try await sync(bob, with: alice)
+
+        try await alice.removeContact(bob.user)
+        #expect(await alice.contacts.isEmpty)
+        #expect(await alice.circles.first?.members.isEmpty == true)
+
+        // Bob keeps the old post but can't read the new one. To deliver the
+        // new post's ciphertext to him at all, Alice re-adds him as a contact
+        // (not to the circle) and they sync.
+        try await alice.post(RichText(plain: "after"), to: .circles(["Friends"]))
+        try await alice.addContact(invite: await bob.invite())
+        try await sync(bob, with: alice)
+        #expect(try await bob.stream().map(\.body.plainText) == ["before"])
+    }
+}

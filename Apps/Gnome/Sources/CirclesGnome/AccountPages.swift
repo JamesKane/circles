@@ -20,6 +20,28 @@ func cardRow(_ children: [Widget]) -> Widget {
     UI.hbox(spacing: 10, classes: ["card", "post-card"], children)
 }
 
+// MARK: - Alert dialogs
+
+/// A libadwaita alert with Cancel and one action.
+@MainActor
+@discardableResult
+func confirm(on parent: Widget, heading: String, body: String, action: String, destructive: Bool,
+             extra: Widget? = nil, _ onConfirm: @escaping @MainActor () -> Void) -> Widget {
+    let dialog = adw_alert_dialog_new(heading, body)!
+    adw_alert_dialog_add_response(g(dialog), "cancel", "Cancel")
+    adw_alert_dialog_add_response(g(dialog), "confirm", action)
+    adw_alert_dialog_set_response_appearance(g(dialog), "confirm", destructive ? ADW_RESPONSE_DESTRUCTIVE : ADW_RESPONSE_SUGGESTED)
+    adw_alert_dialog_set_default_response(g(dialog), "confirm")
+    adw_alert_dialog_set_close_response(g(dialog), "cancel")
+    if let extra { adw_alert_dialog_set_extra_child(g(dialog), extra) }
+    connect(dialog, "response") { (response: UnsafeMutableRawPointer?) in
+        guard let response, String(cString: response.assumingMemoryBound(to: CChar.self)) == "confirm" else { return }
+        onConfirm()
+    }
+    adw_dialog_present(g(dialog), parent)
+    return g(dialog)
+}
+
 // MARK: - Onboarding
 
 @MainActor
@@ -74,6 +96,21 @@ final class PeoplePage {
     private let notice = UI.label("", classes: ["success"], wrap: true)
     private let error = UI.label("", classes: ["error"], wrap: true)
     private let people = UI.vbox(spacing: 6)
+    private let window: Widget
+    private var removeButtons: [UserID: Widget] = [:]
+
+    /// Presses a person's Remove button (snapshot self-test). Returns the
+    /// confirmation dialog it opened. GTK 4 animates an activated button's
+    /// press and emits "clicked" a moment later, so this waits for it.
+    func pressRemove(_ user: UserID) async -> Widget? {
+        guard let button = removeButtons[user] else { return nil }
+        lastDialog = nil
+        _ = gtk_widget_activate(button)
+        for _ in 0..<30 where lastDialog == nil { try? await Task.sleep(for: .milliseconds(50)) }
+        return lastDialog
+    }
+
+    private var lastDialog: Widget?
 
     /// Pastes an invite and presses Add (snapshot self-test).
     func paste(invite: String) {
@@ -81,8 +118,9 @@ final class PeoplePage {
         _ = gtk_widget_activate(add)
     }
 
-    init(model: PeopleScreenModel) {
+    init(model: PeopleScreenModel, window: Widget) {
         self.model = model
+        self.window = window
         gtk_label_set_selectable(g(invite), 1)
         gtk_label_set_lines(g(invite), 2)
         gtk_label_set_ellipsize(g(invite), PANGO_ELLIPSIZE_MIDDLE)
@@ -114,12 +152,30 @@ final class PeoplePage {
         UI.setVisible(notice, state.notice != nil)
         if case .failed(let reason) = state.phase { UI.setText(error, reason) } else { UI.setText(error, "") }
         UI.removeAllChildren(people)
+        removeButtons = [:]
         if state.people.isEmpty { UI.append(people, UI.label("No one yet.", classes: ["dim-label"])) }
         for person in state.people {
             let circles = person.circles.isEmpty ? "Not in any circle" : person.circles.joined(separator: ", ")
-            UI.append(people, cardRow([adw_avatar_new(32, person.name, 1)!,
-                                       UI.vbox(spacing: 2, [UI.label(person.name, classes: ["heading"]),
-                                                            UI.label(circles, classes: ["dim-label", "caption"])])]))
+            let text = UI.vbox(spacing: 2, [UI.label(person.name, classes: ["heading"]),
+                                            UI.label(circles, classes: ["dim-label", "caption"])])
+            UI.expand(text)
+            let rename = UI.button(icon: "document-edit-symbolic", classes: ["flat"], tooltip: "Rename") { [unowned self] in
+                let entry = UI.entry(placeholder: "Name")
+                gtk_editable_set_text(g(entry), person.name)
+                confirm(on: window, heading: "Rename \(person.name)", body: "Only you see this name.",
+                        action: "Rename", destructive: false, extra: entry) { [model] in
+                    model.send(.rename(person.user, to: UI.text(of: entry)))
+                }
+            }
+            let remove = UI.button(icon: "user-trash-symbolic", classes: ["flat"], tooltip: "Remove") { [unowned self] in
+                lastDialog = confirm(on: window, heading: "Remove \(person.name)?",
+                        body: "They'll be taken out of all your circles and won't see anything you post from now on. They keep what they've already seen.",
+                        action: "Remove", destructive: true) { [model] in
+                    model.send(.remove(person.user))
+                }
+            }
+            removeButtons[person.user] = remove
+            UI.append(people, cardRow([adw_avatar_new(32, person.name, 1)!, text, rename, remove]))
         }
     }
 }

@@ -75,6 +75,10 @@ public enum PeopleIntent: Sendable {
     case editInvite(String)
     case addContact
     case copyMyInvite
+    /// Changes our local name for someone.
+    case rename(UserID, to: String)
+    /// Removes someone from our contacts and all our circles.
+    case remove(UserID)
 }
 
 /// Adding people: exchange invites (docs/DESIGN.md §6.3). Both sides add
@@ -111,6 +115,24 @@ public final class PeopleScreenModel: ScreenModel {
         case .copyMyInvite:
             await services.copyToClipboard(state.myInvite)
             state.notice = "Your invite is on the clipboard."
+        case .rename(let user, let name):
+            do {
+                try await account.renameContact(user, to: name)
+                state.phase = .idle
+            } catch {
+                state.phase = .failed("Couldn't rename: \(error)")
+            }
+            await reload()
+        case .remove(let user):
+            let name = state.people.first { $0.user == user }?.name ?? "them"
+            do {
+                try await account.removeContact(user)
+                state.notice = "Removed \(name). They can't see anything you post from now on."
+                state.phase = .idle
+            } catch {
+                state.phase = .failed("Couldn't remove \(name): \(error)")
+            }
+            await reload()
         }
     }
 
