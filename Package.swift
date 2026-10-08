@@ -14,9 +14,16 @@ let package = Package(
     products: [
         .library(name: "CirclesCore", targets: ["CirclesCore"]),
         .library(name: "CirclesCrypto", targets: ["CirclesCrypto"]),
+        .library(name: "CirclesSync", targets: ["CirclesSync"]),
+        .library(name: "CirclesNet", targets: ["CirclesNet"]),
+        .library(name: "CirclesStorage", targets: ["CirclesStorage"]),
+        .library(name: "CirclesKit", targets: ["CirclesKit"]),
+        .executable(name: "circles", targets: ["circles-cli"]),
     ],
     dependencies: [
         .package(url: "https://github.com/apple/swift-crypto.git", "4.0.0"..<"6.0.0"),
+        .package(url: "https://github.com/apple/swift-nio.git", from: "2.100.0"),
+        .package(url: "https://github.com/apple/swift-argument-parser.git", from: "1.5.0"),
     ],
     targets: [
         .target(
@@ -29,6 +36,35 @@ let package = Package(
             dependencies: ["CirclesCore", .product(name: "Crypto", package: "swift-crypto")],
             swiftSettings: swiftSettings
         ),
+        .target(
+            name: "CirclesSync",
+            dependencies: ["CirclesCore", "CirclesCrypto"],
+            swiftSettings: swiftSettings
+        ),
+        .target(
+            name: "CirclesNet",
+            dependencies: [
+                "CirclesCrypto", "CirclesSync",
+                .product(name: "NIOCore", package: "swift-nio"),
+                .product(name: "NIOPosix", package: "swift-nio"),
+            ],
+            swiftSettings: swiftSettings
+        ),
+        .target(
+            name: "CirclesStorage",
+            dependencies: ["CirclesCore", "CirclesCrypto", "CirclesSync"],
+            swiftSettings: swiftSettings
+        ),
+        .target(
+            name: "CirclesKit",
+            dependencies: ["CirclesCore", "CirclesCrypto", "CirclesSync", "CirclesNet", "CirclesStorage"],
+            swiftSettings: swiftSettings
+        ),
+        .executableTarget(
+            name: "circles-cli",
+            dependencies: ["CirclesKit", .product(name: "ArgumentParser", package: "swift-argument-parser")],
+            swiftSettings: swiftSettings
+        ),
         .testTarget(
             name: "CirclesCoreTests",
             dependencies: ["CirclesCore"],
@@ -37,6 +73,21 @@ let package = Package(
         .testTarget(
             name: "CirclesCryptoTests",
             dependencies: ["CirclesCrypto"],
+            swiftSettings: swiftSettings
+        ),
+        .testTarget(
+            name: "CirclesSyncTests",
+            dependencies: ["CirclesSync"],
+            swiftSettings: swiftSettings
+        ),
+        .testTarget(
+            name: "CirclesNetTests",
+            dependencies: ["CirclesNet"],
+            swiftSettings: swiftSettings
+        ),
+        .testTarget(
+            name: "CirclesKitTests",
+            dependencies: ["CirclesKit"],
             swiftSettings: swiftSettings
         ),
     ]

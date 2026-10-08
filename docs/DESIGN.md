@@ -133,7 +133,10 @@ Re-check `swift-nio-quic` at each milestone boundary.
 
 ### 7.2 Peer discovery
 
-1. **LAN:** mDNS/DNS-SD service `_circles._udp`.
+1. **LAN:** mDNS/DNS-SD service `_circles._tcp` (TXT: `v=1`, `u=<UserID>`, `d=<DeviceID>`). This is our own minimal RFC 6762/6763 implementation on SwiftNIO, so it's identical on every platform.
+   - The responder shares port 5353 with the system responder (address and port reuse), announces on start, answers queries, and sends **goodbye** records (TTL 0) on shutdown.
+   - The browser queries from an ephemeral port, so responders reply to it directly by unicast (RFC 6762 §6.7). Browsing therefore works even where 5353 can't be bound.
+   - Verified against Avahi, which fully resolves our advertisement. IPv4 only for now.
 2. **Known peers:** addresses from identity documents, cached per contact.
 3. **DHT:** Kademlia over the same transport, keyed by user ID. It stores signed identity documents and "where to find me" records, never content. Records are signed and have a TTL.
 4. **Pods and relays:** listed in the identity document as stable rendezvous points.
@@ -153,7 +156,7 @@ Re-check `swift-nio-quic` at each milestone boundary.
   - **Forward compatibility:** unknown map keys are ignored when decoding, so **signatures and ContentIDs are always checked against the received bytes, never a re-encoding**.
   - Absent optionals are omitted rather than encoded as null, so adding an optional field doesn't change the encoding of objects that don't use it.
   - A golden test pins the encoding of a sample `Post`. Any change to it is a wire-format break.
-  - *To revisit before M2:* Swift's synthesized `Codable` for enums with associated values (used by `RichText.Run`) produces verbose keys like `_0`. Replace it with hand-written, compact, explicitly versioned encodings before the format is frozen.
+  - **Tagged unions** (`RichText.Run`, `LogBody`, `SyncMessage`) are encoded by hand as `[tag, fields…]` with permanent tag numbers. Swift's synthesized enum encoding (verbose `_0` keys) is never used on the wire. Unknown tags are rejected, so a new tag needs a format version bump. (Done in M2.)
 - The protocol is versioned. Peers negotiate a version range during the handshake.
 - Core RPCs: `Hello`, `GetIdentity`, `GetFrontier`, `GetLog(range)`, `GetObjects([cid])`, `GetBlob(cid, range)`, `Push(objects)`, `Subscribe(feed)`.
 
@@ -282,6 +285,18 @@ Edits are new objects that supersede earlier ones (`supersedes: CID`). Deletes a
 
 > **Open question:** serving every envelope to every contact leaks post frequency and volume. The alternative is per-audience logs, which leak audience structure instead. Prototype both and measure.
 
+#### As implemented in M2 (`CirclesSync`)
+
+- **Log entry** (signed by the device under `circles/v1/log-entry`): author, device, sequence (1-based), previous entry ID, HLC timestamp, and a body. The body is one of: public content (a signed `ContentItem`); sealed content (an `Envelope` whose plaintext is the `ContentItem`, so even the content *kind* is hidden); or a **key grant**. Entry ID = hash of the signed payload.
+- **Key grants travel in the owner's log** with no recipient hint, and each device finds its own by trial decryption. This keeps delivery asynchronous, so grants reach members through any peer, including relays. The cost: one HPKE attempt per grant per reader, and the number of grants hints at total circle sizes. Revisit when pods exist (a pod could deliver grants directly).
+- **Sync protocol (one-shot, symmetric):** `hello` (identity document) → `want` (for each wanted author: frontier plus known identity-document version) → `identity`/`entries` replies → `done`. Each side answers in a separate task, so large transfers can't deadlock. Each side checks:
+  - that the peer's identity document certifies the **Noise static key it connected with**
+  - that the peer is a contact
+  - each entry's signature, certificate and position in the hash chain
+- **Relaying:** peers serve any author's entries they hold, not just their own, and supply missing identity documents. Bob gets Carol's posts through Alice, verified against Carol's identity.
+- Unknown authors, unrequested entries, and the first bad entry per device (with everything after it) are rejected and reported; they don't abort the session.
+- **Not yet:** live subscriptions (a session syncs once and ends; `serve` re-syncs on a timer), and backpressure on received messages (buffered unbounded in memory).
+
 ### 9.3 Media
 
 - Blobs are chunked (content-defined chunking, ~256 KiB target), and each chunk is encrypted with a key derived from the blob's CEK. Chunk CIDs are computed over ciphertext.
@@ -303,6 +318,10 @@ Hybrid Logical Clocks provide timestamps. The Stream is ordered by HLC with a pe
 
 ## 10. Storage
 
+- **M2 interim:** `FileLogStore` keeps one file per log entry (`logs/<author>/<device>/<seq>.cbor`, exactly the received bytes) and one per identity document. Account state lives in small CBOR files, with key material at 0600.
+  - Several processes can share a home directory (`circles serve` plus CLI commands): nothing is cached, writes are atomic, and appends create the file exclusively with a hard link, so two writers can't claim the same sequence number.
+  - Private keys are stored **unencrypted** at 0600 until the platform secret stores below are implemented.
+  - Directory scans are O(entries). SQLite replaces this at M4, when the Stream needs indexes and search.
 - **SQLite** is the source of truth for objects, logs, indexes, contacts, circles, and keys metadata. It is accessed through a thin actor-isolated wrapper. (Candidates: GRDB if its Linux, Windows, and Android support is sufficient, otherwise a minimal in-house wrapper over the SQLite C API.)
 - **Full-text search:** SQLite FTS5 over decrypted local content.
 - **Blob store:** content-addressed files on disk, with per-blob refcount and LRU eviction for cached content from others.
@@ -505,7 +524,7 @@ The protocol will get an independent review before any "1.0" label.
 |---|---|---|
 | M0 | Skeleton | SwiftPM package, CI on macOS/Linux/Windows, Core types + deterministic CBOR + tests. **In progress (2026-10-08):** package, `CirclesCore` (CBOR, multiformats, `UserID`, `ContentID`, HLC, model types) and 42 tests are done and passing on Linux. The CI workflow is written but not yet run, because the repo has no remote. |
 | M1 | Identity & crypto | Identity/device keys, certificates, envelopes, circle keys, KeyGrant; property tests. **Done (2026-10-08):** `CirclesCrypto` module (see §8.2 "Construction"). 76 tests in total pass on Linux, including seeded property tests for tampering, random audiences, signature bit-flips, and CBOR round-trips. |
-| M2 | Two-peer sync over LAN | mDNS discovery, TCP+Noise sessions, per-author logs, CLI can post and read |
+| M2 | Two-peer sync over LAN | mDNS discovery, TCP+Noise sessions, per-author logs, CLI can post and read. **Done (2026-10-08):** `CirclesSync`, `CirclesNet` (Noise XX matching the cacophony test vector, NIO TCP, mDNS), `CirclesStorage`, `CirclesKit`, and the `circles` CLI. 107 tests pass. Verified with two separate processes on Linux: discovery without addresses, sync, circle-restricted reading, removal with key rotation, clean shutdown with mDNS goodbye. |
 | M3 | Pods & relays | Headless pod daemon, store-and-forward, relayed connections, NAT hole punching |
 | M4 | The Stream | Comments, +1s, reshares, media blobs; `CirclesPresentation` + SwiftUI app on macOS/iOS; main-actor spikes for WinUI and GTK |
 | M5 | Communities | MLS-backed groups, moderation tools |

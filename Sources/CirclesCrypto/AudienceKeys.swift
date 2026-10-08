@@ -47,6 +47,17 @@ public struct AudienceKey: Sendable {
         self.epoch = epoch
         self.key = key
     }
+
+    /// Restores a key from storage.
+    public init(id: AudienceKeyID, epoch: UInt64, rawKey: [UInt8]) throws(CryptoError) {
+        guard rawKey.count == 32 else { throw .invalidKey }
+        self.init(id: id, epoch: epoch, key: SymmetricKey(data: rawKey))
+    }
+
+    /// The 32-byte key, for the key store only.
+    public func exportRawKey() -> [UInt8] {
+        key.withUnsafeBytes { Array($0) }
+    }
 }
 
 /// The owner's side of one circle's key (docs/DESIGN.md §8.1): the current
@@ -68,6 +79,13 @@ public struct CircleKeySchedule: Sendable {
 
     public init(members: Set<UserID> = [], rotateOnAdd: Bool = false) {
         current = .generate(epoch: 0)
+        self.members = members
+        self.rotateOnAdd = rotateOnAdd
+    }
+
+    /// Restores a schedule from storage.
+    public init(current: AudienceKey, members: Set<UserID>, rotateOnAdd: Bool) {
+        self.current = current
         self.members = members
         self.rotateOnAdd = rotateOnAdd
     }
@@ -124,4 +142,9 @@ public struct AudienceKeyring: Sendable {
     }
 
     public var count: Int { keys.count }
+
+    /// Every key with its owner, for persisting the keyring.
+    public var allKeys: [(owner: UserID, key: AudienceKey)] {
+        keys.map { ($0.key.owner, $0.value) }
+    }
 }
