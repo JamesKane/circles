@@ -47,6 +47,7 @@ struct FormattingTests {
         #expect(Format.relativeTime(ago(90_000), now: now) == "yesterday")
         #expect(Format.byteCount(512) == "512 B" && Format.byteCount(2048) == "2 KB" && Format.byteCount(2_621_440) == "2.5 MB")
         #expect(Format.initials("Alice Liddell") == "AL" && Format.initials("bob") == "B")
+        #expect(Format.initials("Bob (CLI)") == "BC" && Format.initials("— ✨ Zoë") == "Z" && Format.initials("") == "")
     }
 }
 
