@@ -33,6 +33,9 @@ public actor Account {
 
     let identity: IdentityKeyPair
     let device: DeviceKeyPair
+    /// Our key in the DHT, separate from the device key so it can solve the
+    /// puzzle (docs/DESIGN.md §12).
+    let dhtKeys: DeviceKeyPair
     var keyring = AudienceKeyring()
     private var clock = HybridLogicalClock()
 
@@ -76,11 +79,13 @@ public actor Account {
             store: store,
             identity: IdentityKeyPair(rawRepresentation: keys.identity),
             device: DeviceKeyPair(signingKey: keys.deviceSigning, agreementKey: keys.deviceAgreement),
+            dhtKeys: DHTKeyFile.loadOrCreate(files.dhtKey),
             profile: profile
         )
     }
 
-    private init(home: URL, store: SQLiteLogStore, identity: consuming IdentityKeyPair, device: consuming DeviceKeyPair, profile: Profile) throws {
+    private init(home: URL, store: SQLiteLogStore, identity: consuming IdentityKeyPair, device: consuming DeviceKeyPair,
+                 dhtKeys: consuming DeviceKeyPair, profile: Profile) throws {
         self.home = home
         self.store = store
         user = identity.userID
@@ -90,11 +95,12 @@ public actor Account {
         let state = try Self.loadState(Files(home: home), user: user)
         (contacts, circles, keyring, clock) = (state.contacts, state.circles, state.keyring, state.clock)
         let reference = WeakAccount()
-        dht = DHTNode(key: device.agreementPublicKey, listenPort: nil,
-                      transport: NoiseDHTTransport { await reference.account?.makeHandshake(role: .initiator) },
+        dht = DHTNode(key: dhtKeys.agreementPublicKey, listenPort: nil,
+                      transport: NoiseDHTTransport { await reference.account?.makeDHTHandshake(role: .initiator) },
                       now: { wallClockMillis() })
         self.identity = identity
         self.device = device
+        self.dhtKeys = dhtKeys
         reference.account = self
     }
 
@@ -297,6 +303,11 @@ public actor Account {
         NoiseHandshake(role: role, device: device)
     }
 
+    /// A handshake presenting our DHT key.
+    public func makeDHTHandshake(role: NoiseHandshake.Role) -> NoiseHandshake {
+        NoiseHandshake(role: role, device: dhtKeys)
+    }
+
     public func advertisement(port: Int) -> ServiceAdvertisement {
         ServiceAdvertisement(instanceName: ServiceAdvertisement.instanceName(for: deviceID), port: port,
                              user: user, device: deviceID)
@@ -390,7 +401,7 @@ public actor Account {
             document.certificates.append(certificate)
             var endpoints = document.endpoints ?? Endpoints()
             endpoints.pods.removeAll { $0.device == code.device }
-            endpoints.pods.append(PodEndpoint(device: code.device, host: code.host, port: code.port))
+            endpoints.pods.append(PodEndpoint(device: code.device, host: code.host, port: code.port, dhtKey: code.dhtKey))
             document.endpoints = endpoints
         }
         return PodBundle(identityDocument: identityDocument)
@@ -607,6 +618,8 @@ struct Files {
     var push: URL { account.appendingPathComponent("push.cbor") }
     /// DHT nodes known at the last refresh, to rejoin through.
     var dhtContacts: URL { account.appendingPathComponent("dht-nodes.cbor") }
+    /// Our DHT key pair (0600).
+    var dhtKey: URL { account.appendingPathComponent("dht-key.cbor") }
     /// Communities we own or belong to (0600: holds community keys and MLS
     /// join secrets).
     var communities: URL { account.appendingPathComponent("communities.cbor") }

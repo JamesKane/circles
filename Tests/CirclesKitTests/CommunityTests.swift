@@ -8,7 +8,7 @@ import CirclesSync
 
 /// Serves `community` from its owner over real TCP.
 func servingCommunity<R>(_ owner: Account, _ community: UserID, _ body: (Int) async throws -> R) async throws -> R {
-    let listener = try await NoiseListener(host: "127.0.0.1", port: 0, handshake: await owner.makeHandshake(role: .responder))
+    let listener = try await owner.makeListener(host: "127.0.0.1", port: 0)
     let engine = try await owner.communityEngine(community)
     let task = Task { try await listener.run { session in _ = try await engine.run(over: session) } }
     defer { task.cancel() }
@@ -203,7 +203,7 @@ struct CommunityNodeTests {
     func oneListener() async throws {
         let alice = try await Account.create(home: temporaryHome(), displayName: "Alice")
         let bob = try await Account.create(home: temporaryHome(), displayName: "Bob")
-        let listener = try await NoiseListener(host: "127.0.0.1", port: 0, handshake: await alice.makeHandshake(role: .responder))
+        let listener = try await alice.makeListener(host: "127.0.0.1", port: 0)
         let task = Task { try await listener.run { session in _ = try await alice.respond(over: session) } }
         defer { task.cancel() }
 
@@ -235,7 +235,7 @@ struct CommunityNodeTests {
     func unknownTarget() async throws {
         let alice = try await Account.create(home: temporaryHome(), displayName: "Alice")
         let bob = try await Account.create(home: temporaryHome(), displayName: "Bob")
-        let listener = try await NoiseListener(host: "127.0.0.1", port: 0, handshake: await alice.makeHandshake(role: .responder))
+        let listener = try await alice.makeListener(host: "127.0.0.1", port: 0)
         let task = Task { try await listener.run { session in _ = try await alice.respond(over: session) } }
         defer { task.cancel() }
         await #expect(throws: (any Error).self) {
@@ -252,7 +252,7 @@ struct CommunityPodTests {
         let bob = try await Account.create(home: temporaryHome(), displayName: "Bob")
         let carol = try await Account.create(home: temporaryHome(), displayName: "Carol")
         let (pod, _) = try await PodNode.create(home: temporaryHome(), host: "127.0.0.1", port: 0)
-        let listener = try await NoiseListener(host: "127.0.0.1", port: 0, handshake: await pod.makeHandshake(role: .responder))
+        let listener = try await pod.makeListener(host: "127.0.0.1", port: 0)
         try await pod.setAddress(host: "127.0.0.1", port: UInt16(listener.port))
         _ = try await pod.pair(try await alice.addPod(await pod.pairingCode))
         let podTask = Task { try await listener.run { session in _ = try await pod.respond(over: session) } }
@@ -287,7 +287,7 @@ struct CommunityPodTests {
         let alice = try await Account.create(home: temporaryHome(), displayName: "Alice")
         let mallory = try await Account.create(home: temporaryHome(), displayName: "Mallory")
         let (pod, _) = try await PodNode.create(home: temporaryHome(), host: "127.0.0.1", port: 0)
-        let listener = try await NoiseListener(host: "127.0.0.1", port: 0, handshake: await pod.makeHandshake(role: .responder))
+        let listener = try await pod.makeListener(host: "127.0.0.1", port: 0)
         try await pod.setAddress(host: "127.0.0.1", port: UInt16(listener.port))
         _ = try await pod.pair(try await alice.addPod(await pod.pairingCode))
         let podTask = Task { try await listener.run { session in _ = try await pod.respond(over: session) } }

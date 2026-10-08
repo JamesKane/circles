@@ -79,7 +79,7 @@ public struct NodeService: Sendable {
     /// Runs until cancelled. `onEvent` is called for everything notable.
     public func run(_ preferences: NodePreferences, onEvent: @escaping @Sendable (NodeEvent) async -> Void) async throws {
         let account = self.account
-        let listener = try await NoiseListener(port: preferences.port, handshake: await account.makeHandshake(role: .responder))
+        let listener = try await account.makeListener(port: preferences.port)
         await onEvent(.listening(port: listener.port))
 
         try await withThrowingTaskGroup(of: Void.self) { group in

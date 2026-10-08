@@ -8,7 +8,7 @@ import CirclesNet
 
 /// Runs a pod's listener for the duration of `body`.
 func servingPod<R>(_ pod: PodNode, port: Int = 0, _ body: (Int) async throws -> R) async throws -> R {
-    let listener = try await NoiseListener(host: "127.0.0.1", port: port, handshake: await pod.makeHandshake(role: .responder))
+    let listener = try await pod.makeListener(host: "127.0.0.1", port: port)
     let task = Task {
         try await listener.run { session in _ = try await pod.respond(over: session) }
     }
@@ -29,7 +29,7 @@ struct PodAndRelayTests {
         let (pod, _) = try await PodNode.create(home: temporaryHome(), host: "127.0.0.1", port: 0)
 
         // The pod's port is only known once it listens; then Alice pairs it.
-        let probe = try await NoiseListener(host: "127.0.0.1", port: 0, handshake: await pod.makeHandshake(role: .responder))
+        let probe = try await pod.makeListener(host: "127.0.0.1", port: 0)
         let podPort = probe.port
         try await pod.setAddress(host: "127.0.0.1", port: UInt16(podPort))
         let bundle = try await alice.addPod(await pod.pairingCode)
@@ -142,7 +142,7 @@ struct RevokeDeviceTests {
         let alice = try await Account.create(home: temporaryHome(), displayName: "Alice")
         let bob = try await Account.create(home: temporaryHome(), displayName: "Bob")
         let (pod, _) = try await PodNode.create(home: temporaryHome(), host: "127.0.0.1", port: 0)
-        let listener = try await NoiseListener(host: "127.0.0.1", port: 0, handshake: await pod.makeHandshake(role: .responder))
+        let listener = try await pod.makeListener(host: "127.0.0.1", port: 0)
         try await pod.setAddress(host: "127.0.0.1", port: UInt16(listener.port))
         _ = try await pod.pair(try await alice.addPod(await pod.pairingCode))
         try await befriend(alice, bob)

@@ -118,11 +118,15 @@ public struct PodEndpoint: Sendable, Hashable, Codable {
     public var device: DeviceID
     public var host: String
     public var port: UInt16
+    /// The pod's DHT key, so contacts can join the DHT through it. Absent
+    /// for pods paired before M7.
+    public var dhtKey: AgreementPublicKey?
 
-    public init(device: DeviceID, host: String, port: UInt16) {
+    public init(device: DeviceID, host: String, port: UInt16, dhtKey: AgreementPublicKey? = nil) {
         self.device = device
         self.host = host
         self.port = port
+        self.dhtKey = dhtKey
     }
 }
 

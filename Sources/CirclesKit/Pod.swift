@@ -55,6 +55,8 @@ public struct PodPairingCode: Sendable, Codable {
     public var agreementKey: AgreementPublicKey
     public var host: String
     public var port: UInt16
+    /// The pod's DHT key (added in M7).
+    public var dhtKey: AgreementPublicKey?
 
     static let prefix = "circles-pod:"
 
@@ -62,11 +64,12 @@ public struct PodPairingCode: Sendable, Codable {
         get throws { Self.prefix + Base32.encode(try CBOREncoder().encode(self)) }
     }
 
-    public init(device: DeviceID, agreementKey: AgreementPublicKey, host: String, port: UInt16) {
+    public init(device: DeviceID, agreementKey: AgreementPublicKey, host: String, port: UInt16, dhtKey: AgreementPublicKey? = nil) {
         self.device = device
         self.agreementKey = agreementKey
         self.host = host
         self.port = port
+        self.dhtKey = dhtKey
     }
 
     public init(text: String) throws {
@@ -124,6 +127,7 @@ public actor PodNode {
     public nonisolated let dht: DHTNode
 
     private let device: DeviceKeyPair
+    private let dhtKeys: DeviceKeyPair
 
     struct State: Codable {
         var host: String
@@ -144,10 +148,10 @@ public actor PodNode {
         var agreement: [UInt8]
     }
 
-    private static func files(_ home: URL) -> (device: URL, state: URL, dhtNodes: URL) {
+    private static func files(_ home: URL) -> (device: URL, state: URL, dhtNodes: URL, dhtKey: URL) {
         let pod = home.appendingPathComponent("pod")
         return (pod.appendingPathComponent("device.cbor"), pod.appendingPathComponent("state.cbor"),
-                pod.appendingPathComponent("dht-nodes.cbor"))
+                pod.appendingPathComponent("dht-nodes.cbor"), pod.appendingPathComponent("dht-key.cbor"))
     }
 
     /// Creates a pod reachable at `host:port`, returning it and its pairing code.
@@ -160,7 +164,7 @@ public actor PodNode {
                          to: files.device, private: true)
         try FileIO.write(try CBOREncoder().encode(State(host: host, port: port)), to: files.state)
         let pod = try await open(home: home)
-        return (pod, PodPairingCode(device: pod.deviceID, agreementKey: pod.agreementKey, host: host, port: port))
+        return (pod, await pod.pairingCode)
     }
 
     public static func open(home: URL) async throws -> PodNode {
@@ -171,10 +175,11 @@ public actor PodNode {
         let stored = try CBORDecoder().decode(StoredDevice.self, from: deviceBytes)
         let state = try CBORDecoder().decode(State.self, from: stateBytes)
         return PodNode(home: home, store: try await openStore(home: home),
-                       device: try DeviceKeyPair(signingKey: stored.signing, agreementKey: stored.agreement), state: state)
+                       device: try DeviceKeyPair(signingKey: stored.signing, agreementKey: stored.agreement),
+                       dhtKeys: try DHTKeyFile.loadOrCreate(files.dhtKey), state: state)
     }
 
-    private init(home: URL, store: SQLiteLogStore, device: consuming DeviceKeyPair, state: State) {
+    private init(home: URL, store: SQLiteLogStore, device: consuming DeviceKeyPair, dhtKeys: consuming DeviceKeyPair, state: State) {
         self.home = home
         self.store = store
         deviceID = device.deviceID
@@ -185,10 +190,11 @@ public actor PodNode {
         config = state.config
         push = Dictionary((state.push ?? []).map { ($0.device, $0.targets) }, uniquingKeysWith: { $1 })
         let reference = WeakPod()
-        dht = DHTNode(key: device.agreementPublicKey, listenPort: state.port,
-                      transport: NoiseDHTTransport { await reference.pod?.makeHandshake(role: .initiator) },
+        dht = DHTNode(key: dhtKeys.agreementPublicKey, listenPort: state.port,
+                      transport: NoiseDHTTransport { await reference.pod?.makeDHTHandshake(role: .initiator) },
                       now: { wallClockMillis() })
         self.device = device
+        self.dhtKeys = dhtKeys
         reference.pod = self
     }
 
@@ -202,7 +208,7 @@ public actor PodNode {
     }
 
     public var pairingCode: PodPairingCode {
-        PodPairingCode(device: deviceID, agreementKey: agreementKey, host: host, port: port)
+        PodPairingCode(device: deviceID, agreementKey: agreementKey, host: host, port: port, dhtKey: dht.key)
     }
 
     private func saveState() throws {
@@ -228,6 +234,17 @@ public actor PodNode {
 
     public func makeHandshake(role: NoiseHandshake.Role) -> NoiseHandshake {
         NoiseHandshake(role: role, device: device)
+    }
+
+    public func makeDHTHandshake(role: NoiseHandshake.Role) -> NoiseHandshake {
+        NoiseHandshake(role: role, device: dhtKeys)
+    }
+
+    /// A listener that answers sync with the pod's device key and DHT
+    /// requests with its DHT key.
+    public func makeListener(host: String = "0.0.0.0", port: Int) async throws -> NoiseListener {
+        try await NoiseListener(host: host, port: port, handshake: makeHandshake(role: .responder),
+                                alternates: [DHTPuzzle.noisePurpose: makeDHTHandshake(role: .responder)])
     }
 
     /// A sync engine that speaks for the owner as their pod: it serves and

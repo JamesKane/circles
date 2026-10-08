@@ -176,7 +176,7 @@ let package = Package(
         ),
         .testTarget(
             name: "CirclesPresentationTests",
-            dependencies: ["CirclesPresentation", "CirclesNet"],
+            dependencies: ["CirclesPresentation", "CirclesNet", "CirclesDHT"],
             swiftSettings: swiftSettings
         ),
         .testTarget(

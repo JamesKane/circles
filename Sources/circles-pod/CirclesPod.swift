@@ -69,7 +69,7 @@ struct Serve: AsyncParsableCommand {
         guard let owner = await pod.owner else { throw ValidationError("Not paired yet. Run `circles-pod pair`.") }
         let mapPort = self.mapPort, dhtBootstrap = self.dhtBootstrap
         try await runUntilInterrupted {
-            let listener = try await NoiseListener(port: Int(await pod.port), handshake: await pod.makeHandshake(role: .responder))
+            let listener = try await pod.makeListener(port: Int(await pod.port))
             say("Pod for \(owner) listening on port \(listener.port). Ctrl-C to stop.")
             try await withThrowingTaskGroup(of: Void.self) { group in
                 group.addTask {
@@ -81,7 +81,7 @@ struct Serve: AsyncParsableCommand {
                 }
                 let seeds = try dhtBootstrap.map { try DHTNodeText.contact(from: $0) }
                 group.addTask {
-                    say("DHT node: \(try DHTNodeText.text(for: DHTContact(key: pod.agreementKey, host: await pod.host, port: await pod.port)))")
+                    say("DHT node: \(try DHTNodeText.text(for: DHTContact(key: pod.dht.key, host: await pod.host, port: await pod.port)))")
                     while true {
                         let (nodes, stored) = await pod.maintainDHT(seeds: seeds)
                         say("DHT: \(nodes) node\(nodes == 1 ? "" : "s") known; owner's identity stored on \(stored).")

@@ -21,7 +21,8 @@ struct CirclesRelay: AsyncParsableCommand {
     var dhtBootstrap: [String] = []
 
     func run() async throws {
-        let identity = try RelayIdentity(home: directoryURL(home, environment: "CIRCLES_RELAY_HOME", default: ".circles-relay"))
+        let directory = directoryURL(home, environment: "CIRCLES_RELAY_HOME", default: ".circles-relay")
+        let identity = try RelayIdentity(home: directory)
         let (bind, port, publicHost, dhtPort) = (self.bind, self.port, self.publicHost, self.dhtPort)
         let seeds = try dhtBootstrap.map { try DHTNodeText.contact(from: $0) }
         try await runUntilInterrupted {
@@ -31,8 +32,8 @@ struct CirclesRelay: AsyncParsableCommand {
                 say("  circles relay add \(identity.address(host: publicHost ?? bind, port: relay.port))")
                 group.addTask { try await relay.run() }
                 if let dhtPort {
-                    let dht = try await DHTServer(identity: identity, host: bind, port: dhtPort)
-                    let text = try DHTNodeText.text(for: DHTContact(key: identity.agreementKey, host: publicHost ?? bind, port: UInt16(dht.port)))
+                    let dht = try await DHTServer(home: directory, host: bind, port: dhtPort)
+                    let text = try DHTNodeText.text(for: DHTContact(key: dht.node.key, host: publicHost ?? bind, port: UInt16(dht.port)))
                     say("DHT node listening on \(bind):\(dht.port). Others join through it with:")
                     say("  circles dht bootstrap add \(text)")
                     group.addTask {

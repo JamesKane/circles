@@ -49,7 +49,7 @@ func makeNetwork(_ count: Int) -> (MemoryNetwork, [DHTNode], [DHTContact]) {
         let key = DeviceKeyPair().agreementPublicKey
         let contact = DHTContact(key: key, host: "10.0.\(index / 250).\(index % 250 + 1)", port: 4000)
         let node = DHTNode(key: key, listenPort: 4000, transport: MemoryTransport(me: contact, network: network),
-                           now: { network.clock.withLock { $0 } })
+                           now: { network.clock.withLock { $0 } }, puzzleBits: 0)
         network.add(node, key: key)
         nodes.append(node)
         contacts.append(contact)
@@ -193,7 +193,7 @@ struct DHTTests {
         let key = DeviceKeyPair().agreementPublicKey
         let client = DHTNode(key: key, listenPort: nil,
                              transport: MemoryTransport(me: DHTContact(key: key, host: "203.0.113.9", port: 0), network: network),
-                             now: { 0 })
+                             now: { 0 }, puzzleBits: 0)
         await client.bootstrap([contacts[0]])
         #expect(await nodes[0].contacts.count == 1)
         #expect(await client.contacts.count == 2)
@@ -219,7 +219,7 @@ struct DHTTests {
     func eviction() async throws {
         let key = DeviceKeyPair().agreementPublicKey
         let node = DHTNode(key: key, listenPort: nil, transport: MemoryTransport(me: DHTContact(key: key, host: "h", port: 1), network: MemoryNetwork()),
-                           now: { 1 }, capacity: 3)
+                           now: { 1 }, capacity: 3, puzzleBits: 0)
         let me = NodeID(node: key)
         // Documents sorted by how close their users' keys are to the node.
         var documents: [(user: UserID, name: String, document: SignedObject)] = []
@@ -251,6 +251,25 @@ struct DHTTests {
         let counts = network.recording.withLock { $0 }
         #expect(!counts.isEmpty && counts.values.allSatisfy { $0 == 1 })
         #expect(result.closest.count == DHTNode.k)
+    }
+
+    @Test("only contacts whose keys solve the puzzle enter the routing table")
+    func puzzle() async throws {
+        let network = MemoryNetwork()
+        let key = DHTPuzzle.grind(bits: 8).agreementPublicKey
+        #expect(DHTPuzzle.isSolved(key, bits: 8))
+        let node = DHTNode(key: key, listenPort: 1, transport: MemoryTransport(me: DHTContact(key: key, host: "h", port: 1), network: network),
+                           now: { 1 }, puzzleBits: 8)
+        // A random key almost never solves 8 bits; find one that doesn't.
+        var unsolved = DeviceKeyPair().agreementPublicKey
+        while DHTPuzzle.isSolved(unsolved, bits: 8) { unsolved = DeviceKeyPair().agreementPublicKey }
+        let solved = DHTPuzzle.grind(bits: 8).agreementPublicKey
+        _ = await node.handle(.findNode(target: .random(), listenPort: 2), from: DHTContact(key: unsolved, host: "a", port: 2), observedHost: "a")
+        _ = await node.handle(.findNode(target: .random(), listenPort: 3), from: DHTContact(key: solved, host: "b", port: 3), observedHost: "b")
+        #expect(await node.contacts.map(\.key) == [solved])
+        // Requests from unsolved keys are still answered, just not remembered.
+        let reply = await node.handle(.findNode(target: .random(), listenPort: 2), from: DHTContact(key: unsolved, host: "a", port: 2), observedHost: "a")
+        #expect(reply == .nodes([DHTContact(key: solved, host: "b", port: 3)], observed: "a"))
     }
 
     @Test("full buckets keep long-lived contacts; a failure promotes a waiting one")

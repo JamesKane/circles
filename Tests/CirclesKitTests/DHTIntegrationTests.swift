@@ -9,7 +9,7 @@ import CirclesDHT
 
 /// A DHT bootstrap node like the one `circles-relay --dht-port` runs.
 func withBootstrapNode<R>(_ body: (String) async throws -> R) async throws -> R {
-    let server = try await DHTServer(identity: try RelayIdentity(home: temporaryHome()), host: "127.0.0.1", port: 0)
+    let server = try await DHTServer(home: temporaryHome(), host: "127.0.0.1", port: 0)
     let task = Task { try await server.run(seeds: []) }
     defer { task.cancel() }
     return try await body(try DHTNodeText.text(for: DHTContact(key: server.node.key, host: "127.0.0.1", port: UInt16(server.port))))
@@ -25,7 +25,7 @@ func useBootstrap(_ text: String, _ accounts: Account...) async throws {
 
 /// Serves `account` (sync and DHT) on a fresh port until `body` returns.
 func listening<R>(_ account: Account, _ body: (Int) async throws -> R) async throws -> R {
-    let listener = try await NoiseListener(host: "127.0.0.1", port: 0, handshake: await account.makeHandshake(role: .responder))
+    let listener = try await account.makeListener(host: "127.0.0.1", port: 0)
     let task = Task { try await listener.run { session in _ = try await account.respond(over: session) } }
     defer { task.cancel() }
     return try await body(listener.port)
@@ -78,15 +78,17 @@ struct DHTIntegrationTests {
         let alice = try await Account.create(home: temporaryHome(), displayName: "Alice")
         let dave = try await Account.create(home: temporaryHome(), displayName: "Dave")
         let (pod, _) = try await PodNode.create(home: temporaryHome(), host: "127.0.0.1", port: 0)
-        let listener = try await NoiseListener(host: "127.0.0.1", port: 0, handshake: await pod.makeHandshake(role: .responder))
+        let listener = try await pod.makeListener(host: "127.0.0.1", port: 0)
         try await pod.setAddress(host: "127.0.0.1", port: UInt16(listener.port))
         _ = try await pod.pair(try await alice.addPod(await pod.pairingCode))
         let task = Task { try await listener.run { session in _ = try await pod.respond(over: session) } }
         defer { task.cancel() }
 
+        // Pairing told Alice's identity the pod's DHT key, so contacts can join through it.
+        #expect(await alice.endpoints.pods.first?.dhtKey == pod.dht.key)
         // The pod publishes; Alice's own devices never do.
         #expect(await pod.maintainDHT().stored == 1)
-        let podNode = try DHTNodeText.text(for: DHTContact(key: pod.agreementKey, host: "127.0.0.1", port: UInt16(listener.port)))
+        let podNode = try DHTNodeText.text(for: DHTContact(key: pod.dht.key, host: "127.0.0.1", port: UInt16(listener.port)))
         try await useBootstrap(podNode, dave)
         #expect(try await dave.addContact(user: alice.user).name == "Alice")
     }
@@ -97,7 +99,7 @@ struct DHTIntegrationTests {
         let bob = try await Account.create(home: temporaryHome(), displayName: "Bob")
         try await befriend(alice, bob)
         try await listening(alice) { port in
-            let transport = NoiseDHTTransport { await bob.makeHandshake(role: .initiator) }
+            let transport = NoiseDHTTransport { await bob.makeDHTHandshake(role: .initiator) }
             let aliceNode = DHTContact(key: alice.dht.key, host: "127.0.0.1", port: UInt16(port))
             let reply = try await transport.send(.findNode(target: NodeID.random(), listenPort: 4000), to: aliceNode)
             #expect(reply == .nodes([], observed: "127.0.0.1"))

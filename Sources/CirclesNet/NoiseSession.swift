@@ -52,6 +52,7 @@ public func withNoiseConnection<Result: Sendable>(
     handshake: NoiseHandshake,
     group: any EventLoopGroup = MultiThreadedEventLoopGroup.singleton,
     handshakeTimeout: Duration = .seconds(10),
+    purpose: UInt8? = nil,
     _ body: @escaping @Sendable (NoiseSession) async throws -> Result
 ) async throws -> Result {
     precondition(handshake.role == .initiator)
@@ -61,7 +62,7 @@ public func withNoiseConnection<Result: Sendable>(
         .connect(host: host, port: port) { channel in
             channel.eventLoop.makeCompletedFuture { try wrap(channel) }
         }
-    return try await runSession(channel, handshake: handshake, timeout: handshakeTimeout, body)
+    return try await runSession(channel, handshake: handshake, timeout: handshakeTimeout, firstPayload: purpose.map { [$0] } ?? [], body)
 }
 
 /// Listens for peers and runs `handler` for each session, concurrently.
@@ -70,6 +71,7 @@ public final class NoiseListener: Sendable {
     private let template: NoiseHandshake
     private let handshakeTimeout: Duration
     private let limiter: ConnectionLimiter
+    private let alternates: [UInt8: NoiseHandshake]
 
     /// The port actually bound (useful when binding port 0).
     public var port: Int { server.channel.localAddress?.port ?? 0 }
@@ -93,10 +95,12 @@ public final class NoiseListener: Sendable {
         handshake: NoiseHandshake,
         group: any EventLoopGroup = MultiThreadedEventLoopGroup.singleton,
         handshakeTimeout: Duration = .seconds(10),
-        limits: ConnectionLimits = .default
+        limits: ConnectionLimits = .default,
+        alternates: [UInt8: NoiseHandshake] = [:]
     ) async throws {
         precondition(handshake.role == .responder)
         template = handshake
+        self.alternates = alternates
         self.handshakeTimeout = handshakeTimeout
         limiter = ConnectionLimiter(limits)
         server = try await ServerBootstrap(group: group)
@@ -122,11 +126,11 @@ public final class NoiseListener: Sendable {
                         try? await connection.channel.close()
                         continue
                     }
-                    let handshake = template, timeout = handshakeTimeout, limiter = limiter
+                    let handshake = template, timeout = handshakeTimeout, limiter = limiter, alternates = alternates
                     group.addTask {
                         defer { limiter.release(ip) }
                         try? await runSession(connection, handshake: handshake, timeout: timeout,
-                                              idleTimeout: limiter.limits.idleTimeout, handler)
+                                              idleTimeout: limiter.limits.idleTimeout, alternates: alternates, handler)
                     }
                 }
             }
@@ -152,12 +156,15 @@ func runSession<Result: Sendable>(
     handshake: NoiseHandshake,
     timeout: Duration,
     idleTimeout: Duration = ConnectionLimits.default.idleTimeout,
+    firstPayload: [UInt8] = [],
+    alternates: [UInt8: NoiseHandshake] = [:],
     _ body: @escaping @Sendable (NoiseSession) async throws -> Result
 ) async throws -> Result {
     try await channel.executeThenClose { inbound, outbound in
         var frames = inbound.makeAsyncIterator()
         let transport = try await performHandshake(handshake, frames: &frames, outbound: outbound,
-                                                   underlying: channel.channel, timeout: timeout)
+                                                   underlying: channel.channel, timeout: timeout,
+                                                   firstPayload: firstPayload, alternates: alternates)
         return try await runEstablished(transport, frames: &frames, outbound: outbound,
                                         underlying: channel.channel, remoteHost: channel.channel.remoteAddress?.ipAddress,
                                         idleTimeout: idleTimeout, body)
@@ -174,7 +181,9 @@ func performHandshake(
     frames: inout Frames,
     outbound: FrameWriter,
     underlying: any Channel,
-    timeout: Duration
+    timeout: Duration,
+    firstPayload: [UInt8] = [],
+    alternates: [UInt8: NoiseHandshake] = [:]
 ) async throws -> NoiseTransport {
     let timer = Task {
         try await Task.sleep(for: timeout)
@@ -182,15 +191,23 @@ func performHandshake(
     }
     defer { timer.cancel() }
     var handshake = handshake
+    var first = true
     while !handshake.isComplete {
         if handshake.isMyTurn {
-            try await outbound.write(framed(try handshake.writeMessage()))
+            try await outbound.write(framed(try handshake.writeMessage(payload: first ? firstPayload : [])))
         } else {
             guard let frame = try await frames.next() else {
                 throw timer.isCancelled ? NetError.connectionClosed : NetError.handshakeTimedOut
             }
-            _ = try handshake.readMessage(Array(buffer: frame))
+            let payload = try handshake.readMessage(Array(buffer: frame))
+            // The initiator's first message may name a purpose that this
+            // responder answers with a different static key (the DHT's).
+            if first, handshake.role == .responder, let purpose = payload.first, var alternate = alternates[purpose] {
+                _ = try alternate.readMessage(Array(buffer: frame))
+                handshake = alternate
+            }
         }
+        first = false
     }
     return try handshake.split()
 }

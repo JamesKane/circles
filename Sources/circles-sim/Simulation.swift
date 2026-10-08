@@ -17,12 +17,14 @@ struct Simulation: AsyncParsableCommand {
     @Option(help: "Identity documents published, and lookups per scenario.") var trials = 200
     @Option(help: "Attacker fractions to try, in percent.") var attackers: [Int] = [10, 20, 30]
     @Option(help: "Sybil counts for the targeted eclipse.") var sybils: [Int] = [5, 10, 20, 40]
+    @Option(help: "DHT puzzle difficulty: node keys must solve it (S/Kademlia).") var puzzleBits = 0
 
     func run() async throws {
         let started = ContinuousClock.now
         let network = SimNetwork()
         print("Building a network of \(nodes) nodes…")
-        let (all, contacts) = await network.build(count: nodes) { joined in
+        let puzzle = puzzleBits
+        let (all, contacts) = await network.build(count: nodes, puzzleBits: puzzle) { joined in
             if joined % 1000 == 0 { print("  \(joined) joined (\(elapsed(since: started)))") }
         }
         let tableSizes = await withTaskGroup(of: Int.self) { group in
@@ -92,11 +94,12 @@ struct Simulation: AsyncParsableCommand {
             while sybilContacts.count < count {
                 let key = DeviceKeyPair().agreementPublicKey
                 tries += 1
-                if NodeID(node: key).distance(to: victimKey).lexicographicallyPrecedes(honestNearest.distance(to: victimKey)) {
+                if NodeID(node: key).distance(to: victimKey).lexicographicallyPrecedes(honestNearest.distance(to: victimKey)),
+                   DHTPuzzle.isSolved(key, bits: puzzle) {
                     sybilContacts.append(DHTContact(key: key, host: "172.16.\(sybilContacts.count / 250).\(sybilContacts.count % 250 + 1)", port: 4000))
                 }
             }
-            let sybilNodes = await network.join(sybilContacts, through: contacts)
+            let sybilNodes = await network.join(sybilContacts, through: contacts, puzzleBits: puzzle)
             network.setAttackers(Set(sybilContacts.map(\.key)), contacts: sybilContacts)
             await honest[0].publish(victim.document)
             for paths in [1, 3] {
@@ -131,12 +134,13 @@ final class SimNetwork: Sendable {
     func setAttackers(_ keys: Set<AgreementPublicKey>, contacts: [DHTContact]) { attackers.withLock { $0 = (keys, contacts) } }
 
     /// Builds `count` nodes, each joining through a random earlier one.
-    func build(count: Int, progress: (Int) -> Void) async -> ([DHTNode], [DHTContact]) {
+    func build(count: Int, puzzleBits: Int, progress: (Int) -> Void) async -> ([DHTNode], [DHTContact]) {
         var all: [DHTNode] = [], contacts: [DHTContact] = []
         for index in 0..<count {
-            let key = DeviceKeyPair().agreementPublicKey
+            let key = puzzleBits > 0 ? DHTPuzzle.grind(bits: puzzleBits).agreementPublicKey : DeviceKeyPair().agreementPublicKey
             let contact = DHTContact(key: key, host: "10.\(index >> 16 & 255).\(index >> 8 & 255).\(index & 255)", port: 4000)
-            let node = DHTNode(key: key, listenPort: 4000, transport: SimTransport(me: contact, network: self), now: { 1 })
+            let node = DHTNode(key: key, listenPort: 4000, transport: SimTransport(me: contact, network: self), now: { 1 },
+                               puzzleBits: puzzleBits)
             nodes.withLock { $0[key] = node }
             if let seed = contacts.randomElement() { await node.bootstrap([seed]) }
             all.append(node)
@@ -147,9 +151,10 @@ final class SimNetwork: Sendable {
     }
 
     /// Adds nodes that join through random existing ones (as Sybils would).
-    func join(_ newcomers: [DHTContact], through existing: [DHTContact]) async -> [AgreementPublicKey] {
+    func join(_ newcomers: [DHTContact], through existing: [DHTContact], puzzleBits: Int) async -> [AgreementPublicKey] {
         for contact in newcomers {
-            let node = DHTNode(key: contact.key, listenPort: 4000, transport: SimTransport(me: contact, network: self), now: { 1 })
+            let node = DHTNode(key: contact.key, listenPort: 4000, transport: SimTransport(me: contact, network: self), now: { 1 },
+                               puzzleBits: puzzleBits)
             nodes.withLock { $0[contact.key] = node }
             await node.bootstrap([existing.randomElement()!])
         }

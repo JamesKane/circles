@@ -94,6 +94,8 @@ public actor DHTNode {
     private let transport: any DHTTransport
     private let now: @Sendable () -> UInt64
     private let capacity: Int
+    /// The puzzle difficulty a contact's key must meet to enter our table.
+    public nonisolated let puzzleBits: Int
 
     struct Record: Sendable {
         var document: SignedObject
@@ -102,8 +104,10 @@ public actor DHTNode {
     }
 
     public init(key: AgreementPublicKey, listenPort: UInt16?, transport: any DHTTransport,
-                now: @escaping @Sendable () -> UInt64, capacity: Int = DHTNode.maxRecords) {
+                now: @escaping @Sendable () -> UInt64, capacity: Int = DHTNode.maxRecords,
+                puzzleBits: Int = DHTPuzzle.bits) {
         self.capacity = capacity
+        self.puzzleBits = puzzleBits
         self.key = key
         id = NodeID(node: key)
         self.listenPort = listenPort
@@ -123,7 +127,7 @@ public actor DHTNode {
     /// (its proven key and observed address, with the port it said it
     /// listens on), or nil if it doesn't accept connections.
     public func handle(_ request: DHTMessage, from contact: DHTContact?, observedHost: String?) -> DHTMessage {
-        if let contact { table.saw(contact) }
+        if let contact { see(contact) }
         switch request {
         case .findNode(let target, _):
             return .nodes(closest(to: target, excluding: contact), observed: observedHost)
@@ -137,6 +141,12 @@ public actor DHTNode {
         case .nodes, .value, .stored:
             return .stored(false)
         }
+    }
+
+    /// Adds a contact to the routing table if its key solves the puzzle.
+    private func see(_ contact: DHTContact) {
+        guard DHTPuzzle.isSolved(contact.key, bits: puzzleBits) else { return }
+        table.saw(contact)
     }
 
     private func closest(to target: NodeID, excluding contact: DHTContact?) -> [DHTContact] {
@@ -193,7 +203,7 @@ public actor DHTNode {
     /// looking up our own ID. Returns how many nodes we now know.
     @discardableResult
     public func bootstrap(_ seeds: [DHTContact]) async -> Int {
-        for seed in seeds where seed.key != key { table.saw(seed) }
+        for seed in seeds where seed.key != key { see(seed) }
         _ = await lookup(id, value: nil)
         // Also look up a random ID, to learn nodes beyond our neighborhood.
         _ = await lookup(NodeID.random(), value: nil)
@@ -279,10 +289,12 @@ public actor DHTNode {
                         shortlists[path][contact.id] = nil
                         continue
                     }
-                    table.saw(contact)
+                    see(contact)
                     answered.append(contact)
-                    // Nodes another path has asked stay that path's.
-                    for node in nodes.prefix(Self.k) where node.key != key && !asked.contains(node.id) {
+                    // Nodes another path has asked stay that path's; nodes
+                    // whose keys don't solve the puzzle aren't asked at all.
+                    for node in nodes.prefix(Self.k) where node.key != key && !asked.contains(node.id)
+                        && DHTPuzzle.isSolved(node.key, bits: puzzleBits) {
                         shortlists[path][node.id] = shortlists[path][node.id] ?? node
                     }
                 }

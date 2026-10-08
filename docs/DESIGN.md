@@ -151,7 +151,7 @@ Re-check `swift-nio-quic` at each milestone boundary.
 2. **Known peers:** addresses from identity documents, cached per contact.
 3. **DHT:** Kademlia over the same transport, keyed by user ID. It stores signed identity documents and "where to find me" records, never content. Records are signed and have a TTL.
    - *As built (M6, `CirclesDHT`):* the only record type is the signed identity document, whose endpoints already say where to find someone. Records verify themselves, a higher version replaces a lower, and they expire after 24 hours unless republished (every 30 minutes by `circles serve`, pods and the GNOME app's node).
-   - Node IDs are hashes of Noise static keys, so a contact's ID is proven by the handshake that reaches it. Nodes record contacts at the address they connected from, never one they claim, and only nodes that say they listen are added to routing tables. Buckets of k=20 keep long-lived contacts over newcomers; lookups ask alpha=3 at a time.
+   - Node IDs are hashes of Noise static keys, so a contact's ID is proven by the handshake that reaches it. DHT nodes have a key of their own (not the device key), ground once to solve a puzzle (§12.1); a DHT initiator marks its first Noise message, and the responder answers with its DHT key on the same port. Pods publish theirs in their pairing code and endpoint. Nodes record contacts at the address they connected from, never one they claim, and only nodes that say they listen are added to routing tables. Buckets of k=20 keep long-lived contacts over newcomers; lookups ask alpha=3 at a time.
    - Value lookups collect records from every responder and keep the newest version, so a stale or lying node can't hide an update.
    - DHT requests share each device's sync port: the first frame's tag (64 and up) tells them apart.
    - Who listens: pods (at their configured address) and relays run with `--dht-port`, which act as bootstrap nodes. A user's device offers itself only while router port mapping is active, using the mapped port; otherwise it only asks, so unreachable devices don't fill routing tables.
@@ -652,7 +652,7 @@ Screen models are `@MainActor`. On Apple platforms, the main actor already runs 
 |---|---|---|---|
 | **Passive network observer** | Read traffic; map who talks to whom | Noise XX on every connection (relayed ones end to end); padded envelopes (Padmé) | IPs and timing are visible (§8.4); no cover traffic; mDNS announces the user ID on the local network |
 | **Malicious relay** | Read, alter or impersonate | Peers' Noise sessions run end to end through it, with keys pinned; reservations only for keys a client proves | Learns who connects to whom and when; per-relay limits only (reservations, circuit time and bytes) |
-| **Malicious DHT node, Sybils, eclipse** | Hide or roll back records; steer lookups; flood stores | Records verify themselves and only move forward; lookups take the newest from every responder; node IDs bound to Noise keys; contacts recorded at observed addresses; **3 disjoint lookup paths** (S/Kademlia); 60 stores per IP per hour; full nodes keep the records closest to them | Keys are free, so Sybils are cheap: with 30% of nodes attacking, 8.5% of lookups still fail (§12.3). No proof-of-work node IDs. Contact-provided addresses are tried first, so the DHT is a fallback, not the root of trust |
+| **Malicious DHT node, Sybils, eclipse** | Hide or roll back records; steer lookups; flood stores | Records verify themselves and only move forward; lookups take the newest from every responder; node IDs bound to Noise keys; contacts recorded at observed addresses; **3 disjoint lookup paths** (S/Kademlia); 60 stores per IP per hour; full nodes keep the records closest to them | **Node keys must solve a puzzle** (S/Kademlia static puzzle, 14 bits: about 16,000 key generations per node, once), and DHT nodes use a key of their own, separate from device keys. A targeted eclipse now needs keys that are near the victim *and* solve the puzzle, multiplying its cost by 2^14 (§12.3). Bulk Sybils still cost only a second each: with 30% of nodes attacking, 8.5% of lookups fail. Contact-provided addresses are tried first, so the DHT is a fallback, not the root of trust |
 | **Compromised pod** | Read, alter, withhold | Holds ciphertext only; entries are signed and hash-linked, so alteration and reordering are detected | Learns the owner's contacts and the rosters of the owner's private communities (by design, §8.3); can withhold or delay; knows push handles |
 | **Malicious push relay** | Learn activity, spam wake-ups | Content-free pings; handles are random and given only to the owner's pods; pings coalesced; no answer reveals whether a handle exists | Learns device tokens and which pod IPs ping when |
 | **Malicious contact** | Leak content; exhaust resources | Nothing prevents leaking what one is shown. Resources: 16 MiB messages, batched sync, ≤1024 blobs per session, **≤256 wraps per envelope** (trial decryption stays cheap), **≤250,000 entries kept per author, ≤4096 media chunks per entry** | Key-grant spam costs one HPKE trial per entry. Quotas are counts, not bytes (an entry can still be up to 16 MiB) |
@@ -698,10 +698,16 @@ That's about 20 million inputs, with **no crashes, hangs or memory errors**, swi
 
 In the attack rows, attackers join normally, then answer every lookup with the attackers closest to its target, withhold records and drop stores. The targeted-eclipse Sybils had node IDs ground to be the victim's nearest neighbors, which took about 3 million key generations for 40 of them. Disjoint paths cost about 50% more requests, and they're what keep lookups working under attack.
 
+**Puzzle node keys** (`--puzzle-bits`): node keys must solve a puzzle (SHA-256 of the key starting with that many zero bits), so a targeted Sybil needs a key that is near the victim *and* solves it.
+- **Expected cost:** the attacker's work multiplies by 2^bits.
+- **Measured:** on 2,000 nodes at 6 bits, grinding 10 Sybils took 9.2 million keys instead of 8,600. That's more than the expected 64×, because the cost depends heavily on how close the victim's nearest honest node happens to be in each run.
+- **At the default 14 bits** on 10,000 nodes, 40 Sybils need about 40 × 10,000 × 16,384 ≈ 6.6 billion key generations, against 2.9 million without the puzzle.
+- **Honest nodes** pay about 16,000 key generations once. Lookup success and cost are unchanged.
+
 ### 12.4 Still to address
 
 - Metadata (§8.4): IPs and timing, the pod learning rosters, cover traffic.
-- Cheap Sybils: proof-of-work or stake-weighted node IDs; preferring long-lived contacts already helps.
+- Bulk Sybils: the puzzle prices each at about a second; stake-weighted or longer-lived trust would raise that further.
 - Spam on first contact: contacts are only added by invite, so the remaining surface is community join requests, which now carry postage. Contact-of-contact allowances would matter if contact requests are ever added.
 
 ## 13. Future Work
