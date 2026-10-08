@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Held at 6.3 until 6.4 is released; see Package.swift.
+  SWIFT_BRANCH: swift-6.3.1-release
+  SWIFT_TAG: 6.3.1-RELEASE
+
+jobs:
+  linux:
+    name: Linux (${{ matrix.image }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ["swift:6.3-noble", "swift:6.3-jammy"]
+    container: ${{ matrix.image }}
+    steps:
+      - uses: actions/checkout@v4
+      - run: swift --version
+      - run: swift build --build-tests
+      - run: swift test --skip-build
+
+  macos:
+    name: macOS
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: compnerd/gha-setup-swift@main
+        with:
+          swift-version: ${{ env.SWIFT_BRANCH }}
+          swift-build: ${{ env.SWIFT_TAG }}
+      - run: swift --version
+      - run: swift build --build-tests
+      - run: swift test --skip-build
+
+  windows:
+    name: Windows
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: compnerd/gha-setup-swift@main
+        with:
+          swift-version: ${{ env.SWIFT_BRANCH }}
+          swift-build: ${{ env.SWIFT_TAG }}
+      - run: swift --version
+      - run: swift build --build-tests
+      - run: swift test --skip-build

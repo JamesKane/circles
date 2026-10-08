@@ -147,7 +147,13 @@ Re-check `swift-nio-quic` at each milestone boundary.
 
 ### 7.4 Wire protocol
 
-- Messages are length-prefixed **deterministic CBOR** (RFC 8949 §4.2). Swift `Codable` types use a custom deterministic encoder so that signatures are stable.
+- Messages are length-prefixed **deterministic CBOR** (RFC 8949 §4.2.1, core deterministic encoding). Swift `Codable` types use our own encoder (`CirclesCore/CBOR`) so that signatures are stable.
+  - **Restricted data model:** unsigned and negative integers, byte strings, UTF-8 text, arrays, maps, booleans, null. **No floating point** (the encoder throws on it), no tags, no `undefined`, no indefinite lengths. Anything numeric in a signed object is an integer in fixed units (milliseconds, pixels, bytes).
+  - **Strict decoding:** the decoder rejects any input that isn't already in deterministic form (overlong arguments, unsorted or duplicate map keys, and so on). If something decodes, its encoding is unique.
+  - **Forward compatibility:** unknown map keys are ignored when decoding, so **signatures and ContentIDs are always checked against the received bytes, never a re-encoding**.
+  - Absent optionals are omitted rather than encoded as null, so adding an optional field doesn't change the encoding of objects that don't use it.
+  - A golden test pins the encoding of a sample `Post`. Any change to it is a wire-format break.
+  - *To revisit before M2:* Swift's synthesized `Codable` for enums with associated values (used by `RichText.Run`) produces verbose keys like `_0`. Replace it with hand-written, compact, explicitly versioned encodings before the format is frozen.
 - The protocol is versioned. Peers negotiate a version range during the handshake.
 - Core RPCs: `Hello`, `GetIdentity`, `GetFrontier`, `GetLog(range)`, `GetObjects([cid])`, `GetBlob(cid, range)`, `Push(objects)`, `Subscribe(feed)`.
 
@@ -183,6 +189,7 @@ A post's audience is a set of circles, individuals, or `public`.
 Public posts skip encryption and are signed only.
 
 Leaving a circle: the next post uses a new epoch the removed member doesn't have. They keep posts they already received. This matches Google+ semantics, where removing someone hid future posts but couldn't erase what they had seen.
+
 
 ### 8.3 Communities (multi-writer groups)
 
@@ -483,8 +490,8 @@ The protocol will get an independent review before any "1.0" label.
 
 | # | Milestone | Exit criteria |
 |---|---|---|
-| M0 | Skeleton | SwiftPM package, CI on macOS/Linux/Windows, Core types + deterministic CBOR + tests |
-| M1 | Identity & crypto | Identity/device keys, certificates, envelopes, circle keys, KeyGrant; property tests |
+| M0 | Skeleton | SwiftPM package, CI on macOS/Linux/Windows, Core types + deterministic CBOR + tests. **In progress (2026-10-08):** package, `CirclesCore` (CBOR, multiformats, `UserID`, `ContentID`, HLC, model types) and 42 tests are done and passing on Linux. The CI workflow is written but not yet run, because the repo has no remote. |
+| M1 | Identity & crypto | Identity/device keys, certificates, envelopes, circle keys, KeyGrant; property tests. |
 | M2 | Two-peer sync over LAN | mDNS discovery, TCP+Noise sessions, per-author logs, CLI can post and read |
 | M3 | Pods & relays | Headless pod daemon, store-and-forward, relayed connections, NAT hole punching |
 | M4 | The Stream | Comments, +1s, reshares, media blobs; `CirclesPresentation` + SwiftUI app on macOS/iOS; main-actor spikes for WinUI and GTK |
