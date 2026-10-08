@@ -3,7 +3,7 @@
 A reimplementation of the Google+ social model (Circles, the Stream, posts,
 +1s, Communities) on a peer-to-peer backbone, in Swift.
 
-**Status:** early development; milestones M0–M4. Post to circles with photos, comment, +1 and reshare; sync on the local network, through your own pod while you're offline, or through relays. Command line only for now; native apps are next. See [docs/DESIGN.md](docs/DESIGN.md).
+**Status:** early development; milestones M0–M4. Post to circles with photos, comment, +1 and reshare; sync on the local network, through your own pod while you're offline, or through relays. A GNOME app is here; the SwiftUI app is next. See [docs/DESIGN.md](docs/DESIGN.md).
 
 ## Building
 
@@ -58,6 +58,15 @@ circles serve --map-port   # also asks your router to forward the port
 circles sync               # local network, pods, then relays
 ```
 
+### GNOME app
+
+Needs GTK 4 and libadwaita development files (`dnf install gtk4-devel libadwaita-devel`, or `apt install libadwaita-1-dev`):
+
+```sh
+swift build --package-path Apps/Gnome
+CIRCLES_HOME=~/.circles Apps/Gnome/.build/debug/CirclesGnome
+```
+
 ## Layout
 
 - `Sources/CirclesCore`: identifiers, deterministic CBOR, hybrid logical
@@ -71,6 +80,7 @@ circles sync               # local network, pods, then relays
 - `Sources/CirclesKit`: the `Account` and `PodNode` façades: posting, comments, +1s, reshares, media, sync.
 - `Sources/CirclesPresentation`: platform-neutral screen models every UI renders.
 - `Sources/circles-cli`, `circles-pod`, `circles-relay`: the command-line tools.
+- `Apps/Gnome`: the GNOME app (GTK 4 + libadwaita), a separate package.
 
 ## License
 

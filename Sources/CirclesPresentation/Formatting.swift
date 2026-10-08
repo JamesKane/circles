@@ -37,8 +37,11 @@ public enum Strings {
     public static let everyone = "Public"
     public static let limited = "Limited"
     public static let pending = "Only you can see this until it's approved"
+    public static let noAudience = "Choose who can see this"
+    /// Never says "Public" unless the post really is: an empty selection must
+    /// not read as sharing with everyone.
     public static func audience(circles: [String]) -> String {
-        circles.isEmpty ? everyone : "Shared with " + circles.joined(separator: ", ")
+        circles.isEmpty ? noAudience : "Shared with " + circles.joined(separator: ", ")
     }
 }
 

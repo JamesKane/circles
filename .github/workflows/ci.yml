@@ -31,6 +31,16 @@ jobs:
       - run: swift build --build-tests
       - run: swift test --skip-build
 
+  gnome:
+    name: GNOME app (build)
+    runs-on: ubuntu-latest
+    container: swift:6.3-noble
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install SQLite, GTK 4 and libadwaita headers
+        run: apt-get update && apt-get install -y --no-install-recommends libsqlite3-dev libadwaita-1-dev
+      - run: swift build --package-path Apps/Gnome
+
   macos:
     name: macOS
     runs-on: macos-15

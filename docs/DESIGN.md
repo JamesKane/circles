@@ -536,7 +536,28 @@ Enforcement:
 `CirclesPresentation` exists, with screen models for the Stream (with circle filter), a post and its thread, the composer (audience, attachments, reply policy) and circles. It also has `PostCard`/`CommentRow` view state, navigation, formatting, strings, design tokens, `PlatformServices` and `MediaLoader`.
 - It builds and is tested headless on Linux, and the tests drive full scenarios (compose → sync → comment → approve) through screen models alone.
 - The `circles stream` command renders from `StreamScreenModel`, a first non-test backend.
-- **No native UI yet (decided 2026-10-08):** this machine can't build SwiftUI, and GTK development packages aren't installed, so the SwiftUI and GNOME backends and the main-actor spikes move to a later milestone.
+- **No native UI yet (decided 2026-10-08):** this machine can't build SwiftUI, and GTK development packages aren't installed, so the SwiftUI and GNOME backends and the main-actor spikes move to a later milestone. *(GNOME done in M4.5, below.)*
+
+#### GNOME backend (M4.5, `Apps/Gnome`)
+
+- **Direct C interop, not Adwaita for Swift (decided 2026-10-08).** Adwaita for Swift pulls dependencies from unpinned `branch: "main"`, ships a module named `CSQLite` that clashes with ours, and brings its own declarative state system that would duplicate `CirclesPresentation`. Instead, a `CGtk` system-library target imports libadwaita/GTK 4, and **`GtkKit`** adds a thin layer:
+  - closures for signals
+  - `g(_:)`, a pointer conversion whose return type is inferred, covering GTK 4's mix of opaque types (`GtkLabel`) and defined ones (`GtkBox`)
+  - `observe(_:)` over Swift Observation
+  - widget builders
+- **A separate package** (`Apps/Gnome/Package.swift`, depending on the root by path), so the core packages never need GTK. CI builds it on Ubuntu 24.04 (libadwaita 1.5).
+- **Main-thread integration: solved.** libdispatch's main-queue hooks (`_dispatch_get_main_queue_handle_4CF` / `_dispatch_main_queue_callback_4CF`, the same ones CoreFoundation's run loop uses on Linux) become a GLib fd source, so `@MainActor` work runs inside GTK's main loop. The `MainActorSpike` executable verifies it runs on the main thread, and that the loop doesn't spin when idle (3 s idle ≈ 0 extra CPU).
+- **The pattern** §11.6 describes, confirmed in practice:
+  - each page observes its screen model and updates widgets in place
+  - the Stream diffs rows by post ID
+  - two-way controls (entries, switches, toggles) send an intent only when the widget's value differs from state, so rendering never echoes back
+  - rich text becomes Pango markup, design tokens become libadwaita style classes, and `PlatformServices` uses GtkFileDialog, the clipboard and GNotification
+- **Verification:** `CirclesGnome --snapshot DIR` drives the real app through Stream, post, Circles and composer, and renders each to PNG with GTK's own renderer (only this window, never the screen). It then **activates the real Post and +1 buttons** and checks the shared model state changed: GTK signal → intent → Account → SQLite → re-render.
+- **Found through the GNOME work:** the presentation layer labelled a post with no audience chosen as "Public". It's fixed for every UI, with a test. Desktops using another icon theme (e.g. Breeze) lack some Adwaita icon names, so the app bundles its own icons.
+- **Not yet in the app:**
+  - accepting incoming syncs (listener, mDNS, relays); the app has a Sync button, and `circles serve` still does serving
+  - onboarding (creating an account or adding contacts in the UI)
+  - pod and relay settings
 
 #### Main-thread integration
 
@@ -587,7 +608,7 @@ The protocol will get an independent review before any "1.0" label.
 | M2 | Two-peer sync over LAN | mDNS discovery, TCP+Noise sessions, per-author logs, CLI can post and read. **Done (2026-10-08):** `CirclesSync`, `CirclesNet` (Noise XX matching the cacophony test vector, NIO TCP, mDNS), `CirclesStorage`, `CirclesKit`, and the `circles` CLI. 107 tests pass. Verified with two separate processes on Linux: discovery without addresses, sync, circle-restricted reading, removal with key rotation, clean shutdown with mDNS goodbye. |
 | M3 | Pods & relays | Headless pod daemon, store-and-forward, relayed connections, ~~NAT hole punching~~ port mapping (hole punching deferred to QUIC). **Done (2026-10-08):** `circles-pod`, `circles-relay`, endpoints in identity documents, sync control messages, PCP/NAT-PMP/UPnP-IGD mapping. 123 tests pass. Verified live with separate processes (pod store-and-forward, relay-only delivery). UPnP-IGD verified live against a real router: it mapped a port, the router listed it, and it was removed (opt-in test, `CIRCLES_LIVE_PORT_MAPPING=1`). |
 | M4 | The Stream | Comments, +1s, reshares, media blobs; `CirclesPresentation` ~~+ SwiftUI app on macOS/iOS; main-actor spikes for WinUI and GTK~~ (native UIs deferred). **Done (2026-10-08):** SQLite store with migration; encrypted chunked media synced eagerly; comments/+1s through author republishing; reshares of public posts; presentation layer with headless tests; CLI commands. 138 tests pass. Verified live by migrating the M3 demo data and running photo, comment, +1, approval and reshare through a pod. |
-| M4.5 | Native UIs | SwiftUI app (macOS/iOS) and GNOME app over `CirclesPresentation`; main-actor integration spikes for GTK and WinUI. Needs a Mac, and GTK development packages. |
+| M4.5 | Native UIs | SwiftUI app (macOS/iOS) and GNOME app over `CirclesPresentation`; main-actor integration spikes for GTK and WinUI. **GNOME done (2026-10-08):** `Apps/Gnome` (libadwaita via direct C interop), main-actor integration solved, self-testing snapshot mode. **Remaining:** SwiftUI on the Mac Studio; WinUI spike on Windows. |
 | M5 | Communities | MLS-backed groups, moderation tools |
 | M6 | Platform breadth | Windows (WinUI), Linux (GTK/libadwaita), and Android apps on the shared presentation layer; push relay, DHT |
 | M7 | Hardening | Threat-model review, fuzzing (wire format, CBOR), simulation at 10k nodes |

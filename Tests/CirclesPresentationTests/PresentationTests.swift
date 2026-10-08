@@ -65,6 +65,10 @@ struct ScreenModelTests {
 
         await composer.perform(.editText("first light"))
         #expect(!composer.state.canPost) // no audience yet
+        #expect(composer.state.audienceSummary == "Choose who can see this") // never "Public" by default
+        await composer.perform(.setShareWithEveryone(true))
+        #expect(composer.state.audienceSummary == "Public")
+        await composer.perform(.setShareWithEveryone(false))
         await composer.perform(.toggleCircle("Family"))
         #expect(composer.state.canPost && composer.state.audienceSummary == "Shared with Family")
         await composer.perform(.pickImage)
