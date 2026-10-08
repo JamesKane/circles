@@ -18,6 +18,7 @@ struct ComposerView: View {
         VStack(alignment: .leading, spacing: 16) {
             ZStack(alignment: .topLeading) {
                 TextEditor(text: $text)
+                    .accessibilityIdentifier("composer-text")
                     .font(.body)
                     .scrollContentBackground(.hidden)
                     .padding(6)
@@ -79,6 +80,7 @@ struct ComposerView: View {
                 } else {
                     Button("Post") { model.send(.post) }
                         .keyboardShortcut(.return, modifiers: .command)
+                        .accessibilityIdentifier("composer-post")
                         .disabled(!state.canPost)
                 }
             }
@@ -104,6 +106,7 @@ struct ComposerView: View {
                                      set: { model.send(.setShareWithEveryone($0)) })) {
                     Label("Public", systemImage: "globe")
                 }
+                .accessibilityIdentifier("audience-public")
                 ForEach(state.circles, id: \.self) { name in
                     Toggle(isOn: Binding(get: { model.state.selectedCircles.contains(name) },
                                          set: { _ in model.send(.toggleCircle(name)) })) {

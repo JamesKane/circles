@@ -87,7 +87,21 @@ xcodebuild -project Apps/Apple/Circles.xcodeproj -scheme Circles build
 
 It builds signed to run locally. To sign with your own team, which macOS needs before it reliably grants the app Local Network access, copy `Apps/Apple/Config/Local.xcconfig.example` to `Local.xcconfig` and set your team ID.
 
-The app is sandboxed and keeps its data in its container's Application Support folder. So far it has onboarding, the Stream, posts with comments, +1s and resharing, and the composer; People, Circles and Settings come next.
+A UI test walks the first-run journey through the real app (onboarding, invites, an incoming sync, +1, commenting, posting, circles, settings), with the test runner playing the second person over loopback. Each step's screenshot is attached to the result:
+
+```sh
+xcodebuild -project Apps/Apple/Circles.xcodeproj -scheme Circles test
+```
+
+macOS asks for an administrator's approval to enable UI automation; `sudo automationmodetool enable-automationmode-without-authentication` allows it permanently on a development or CI Mac.
+
+To build a signed, notarized disk image to hand out (needs a Developer ID Application certificate; see the top of the script for the one-time notarization setup):
+
+```sh
+NOTARY_PROFILE=circles-notary Apps/Apple/package.sh   # → Apps/Apple/build/Circles-<version>.dmg
+```
+
+The app is sandboxed and keeps its data in its container's Application Support folder. [docs/USER_MANUAL.md](docs/USER_MANUAL.md) is a draft user manual with screenshots.
 
 ## Layout
 

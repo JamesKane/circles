@@ -16,7 +16,10 @@ struct PostPageView: View {
     @State private var confirmingReshare: Bool
     @State private var reshareComment = ""
     @State private var notice: String?
+    @State private var confirmingDelete = false
+    @State private var removingComment: CommentRow?
     @FocusState private var commentFocused: Bool
+    @Environment(\.dismiss) private var dismiss
 
     init(route: PostRoute, session: AppModel.Session) {
         self.session = session
@@ -41,7 +44,8 @@ struct PostPageView: View {
                                  showThread: true,
                                  onPlusOne: { model.send(.togglePlusOne) },
                                  onOpen: { commentFocused = true },
-                                 onReshare: { confirmingReshare = true })
+                                 onReshare: { confirmingReshare = true },
+                                 onRemoveComment: { removingComment = $0 })
                 } else if state.phase == .idle || state.phase == .loading {
                     ProgressView()
                         .frame(maxWidth: .infinity)
@@ -53,6 +57,26 @@ struct PostPageView: View {
         }
         .safeAreaInset(edge: .bottom, spacing: 0) { composer }
         .navigationTitle(state.card.map { "\($0.authorName)'s post" } ?? "Post")
+        .toolbar {
+            if state.card?.canDelete == true {
+                ToolbarItem {
+                    Button("Delete Post", systemImage: "trash", role: .destructive) { confirmingDelete = true }
+                        .help("Delete this post")
+                }
+            }
+        }
+        .onChange(of: model.state.deleted) { if model.state.deleted { dismiss() } }
+        .confirmationDialog("Delete this post?", isPresented: $confirmingDelete) {
+            Button("Delete Post", role: .destructive) { model.send(.delete) }
+        } message: {
+            Text("It's removed for everyone, along with its comments and +1s, as they sync.")
+        }
+        .confirmationDialog("Remove this comment?", isPresented: Binding(get: { removingComment != nil }, set: { if !$0 { removingComment = nil } }),
+                            presenting: removingComment) { comment in
+            Button("Remove Comment", role: .destructive) { model.send(.removeComment(comment.id)) }
+        } message: { comment in
+            Text("\(comment.authorName)'s comment is taken out of your post's thread for everyone.")
+        }
         .task { await model.perform(.load) }
         // Comments and +1s from a sync show up while the page is open.
         .onChange(of: session.network.state.newContentCount) { model.send(.load) }
@@ -78,6 +102,7 @@ struct PostPageView: View {
                 .lineLimit(1...5)
                 .textFieldStyle(.roundedBorder)
                 .focused($commentFocused)
+                .accessibilityIdentifier("comment-field")
                 .onSubmit { model.send(.submitComment) }
             Button("Comment") { model.send(.submitComment) }
                 .disabled(!model.state.canSubmitComment)

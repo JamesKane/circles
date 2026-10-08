@@ -12,7 +12,7 @@ struct RootView: View {
         case .onboarding(let model):
             OnboardingView(model: model) { app.start($0) }
         case .ready(let session):
-            StreamView(session: session)
+            MainView(app: app, session: session)
         case .failed(let message):
             ContentUnavailableView {
                 Label("Couldn't open your account", systemImage: "exclamationmark.triangle")
@@ -39,6 +39,7 @@ struct OnboardingView: View {
                 .multilineTextAlignment(.center)
                 .foregroundStyle(.secondary)
             TextField("Your name", text: $name)
+                .accessibilityIdentifier("onboarding-name")
                 .textFieldStyle(.roundedBorder)
                 .frame(maxWidth: 280)
                 .onSubmit { model.send(.create) }
@@ -47,6 +48,7 @@ struct OnboardingView: View {
                     .foregroundStyle(.red)
             }
             Button("Create Identity") { model.send(.create) }
+                .accessibilityIdentifier("onboarding-create")
                 .keyboardShortcut(.defaultAction)
                 .disabled(!model.state.canCreate)
         }

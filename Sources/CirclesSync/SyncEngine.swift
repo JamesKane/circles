@@ -49,6 +49,9 @@ public struct SyncReport: Sendable {
     public var sent = 0
     public var blobsReceived = 0
     public var blobsSent = 0
+    /// Control messages handled without error, e.g. a join request reaching
+    /// a community's owner. They change state as entries do.
+    public var controlsAccepted = 0
     /// Human-readable reasons for entries or documents that were rejected.
     public var rejected: [String] = []
 }
@@ -136,6 +139,7 @@ public struct SyncEngine: Sendable {
             case .control(let control):
                 do {
                     try await policy.handleControl(control, peer)
+                    report.controlsAccepted += 1
                 } catch {
                     report.rejected.append("control message: \(error)")
                 }
