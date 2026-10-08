@@ -20,6 +20,9 @@ public struct Post: Sendable, Hashable, Codable {
     public var collection: CollectionID?
     public var replyPolicy: ReplyPolicy
     public var supersedes: ContentID?
+    /// The community this post was written for (docs/DESIGN.md §8.3), if any.
+    /// Absent for ordinary posts (added in M5).
+    public var community: UserID?
 
     public init(
         author: UserID,
@@ -29,8 +32,10 @@ public struct Post: Sendable, Hashable, Codable {
         reshareOf: ObjectRef? = nil,
         collection: CollectionID? = nil,
         replyPolicy: ReplyPolicy = ReplyPolicy(),
-        supersedes: ContentID? = nil
+        supersedes: ContentID? = nil,
+        community: UserID? = nil
     ) {
+        self.community = community
         self.author = author
         self.created = created
         self.body = body

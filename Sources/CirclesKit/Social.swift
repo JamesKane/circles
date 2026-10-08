@@ -315,7 +315,8 @@ extension Account {
                   let item = try? CBORDecoder().decode(ContentItem.self, from: plaintext)
             else { return nil }
             return (item, .limited)
-        case .keyGrant:
+        case .keyGrant, .community:
+            // Community records are read through the community, not the Stream.
             return nil
         }
     }

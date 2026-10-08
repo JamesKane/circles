@@ -70,6 +70,9 @@ public enum LogBody: Sendable, Hashable {
     /// A circle key for one member device. It carries no recipient hint, so
     /// devices find their own grants by trial decryption.
     case keyGrant(SealedKeyGrant)
+    /// A record in a community's log, written by its sequencer
+    /// (docs/DESIGN.md §8.3).
+    case community(CommunityRecord)
 }
 
 /// Wire form `[tag, value]`. Tags are permanent.
@@ -81,6 +84,7 @@ extension LogBody: Codable {
         case 0: self = .publicContent(try container.decode(ContentItem.self))
         case 1: self = .sealedContent(try container.decode(Envelope.self))
         case 2: self = .keyGrant(try container.decode(SealedKeyGrant.self))
+        case 3: self = .community(try container.decode(CommunityRecord.self))
         default: throw CBORError.custom("unknown log body tag \(tag)")
         }
         guard container.isAtEnd else { throw CBORError.custom("trailing fields in log body") }
@@ -98,6 +102,9 @@ extension LogBody: Codable {
         case .keyGrant(let grant):
             try container.encode(UInt64(2))
             try container.encode(grant)
+        case .community(let record):
+            try container.encode(UInt64(3))
+            try container.encode(record)
         }
     }
 }
