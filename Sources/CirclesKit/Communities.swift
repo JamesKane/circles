@@ -113,9 +113,13 @@ public enum CommunityError: Error, Sendable, Equatable {
     case inviteExpired
     case invalidRequest
     case unknownPost
+    case staleRequest
 }
 
 extension Account {
+    /// How long a signed join request stays valid.
+    static let joinRequestLifetimeMillis: UInt64 = 3600 * 1000
+
     // MARK: State
 
     func loadCommunities() throws -> [CommunityState] {
@@ -303,6 +307,12 @@ extension Account {
         let payload = try peer.identity.verify(control, label: .communityJoin, atMillis: wallClockMillis())
         let request = try CBORDecoder().decode(JoinRequest.self, from: payload)
         guard request.community == community, request.user == peer.user else { throw CommunityError.invalidRequest }
+        // Fresh only, so a captured request can't be replayed later (e.g. to
+        // re-add someone who left). Pending members sign a new one each sync.
+        let now = wallClockMillis()
+        guard request.createdMillis + Self.joinRequestLifetimeMillis >= now, request.createdMillis <= now + 5 * 60 * 1000 else {
+            throw CommunityError.staleRequest
+        }
         let state = try self.community(community)
         guard let profile = state.decodedProfile, !state.roster.contains(request.user) else { return }
         if profile.visibility == .private {

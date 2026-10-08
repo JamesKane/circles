@@ -122,6 +122,22 @@ struct CommunityTests {
         #expect(try await eve.communities().first?.role == .pending)
     }
 
+    @Test("a join request is refused once stale, so it can't be replayed")
+    func staleJoinRequest() async throws {
+        let alice = try await Account.create(home: temporaryHome(), displayName: "Alice")
+        let bob = try await Account.create(home: temporaryHome(), displayName: "Bob")
+        let community = try await alice.createCommunity(name: "Open", visibility: .public, joinPolicy: .open)
+        try await bob.joinCommunity(invite: try await alice.communityInvite(community))
+        let old = JoinRequest(community: community, user: bob.user, keyPackage: nil, invite: nil,
+                              createdMillis: wallClockMillis() - Account.joinRequestLifetimeMillis - 1)
+        let signed = try await bob.signForTesting(old, label: .communityJoin)
+        let peer = PeerInfo(user: bob.user, identity: try VerifiedIdentity(verifying: await bob.identityDocument, for: bob.user), device: nil)
+        await #expect(throws: CommunityError.staleRequest) {
+            try await alice.receiveJoinRequest(signed, from: peer, for: community)
+        }
+        #expect(try await alice.communityMembers(community).map(\.user) == [alice.user])
+    }
+
     @Test("the owner can remove an item; non-members can't post")
     func moderation() async throws {
         let alice = try await Account.create(home: temporaryHome(), displayName: "Alice")

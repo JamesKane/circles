@@ -9,6 +9,12 @@ public struct PeerInfo: Sendable {
     /// The certified device that connected, when the transport authenticated
     /// a static key (always, over Noise).
     public let device: DeviceCertificate?
+
+    public init(user: UserID, identity: VerifiedIdentity, device: DeviceCertificate?) {
+        self.user = user
+        self.identity = identity
+        self.device = device
+    }
 }
 
 /// Who a node will sync with and whose logs it wants.
