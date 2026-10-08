@@ -64,8 +64,10 @@ Needs GTK 4 and libadwaita development files (`dnf install gtk4-devel libadwaita
 
 ```sh
 swift build --package-path Apps/Gnome
-CIRCLES_HOME=~/.circles Apps/Gnome/.build/debug/CirclesGnome
+Apps/Gnome/.build/debug/CirclesGnome   # uses $CIRCLES_HOME or ~/.circles
 ```
+
+The app walks you through creating an identity, exchanging invites, circles, pods and relays, and stays online while it's open (no `circles serve` needed).
 
 ## Layout
 

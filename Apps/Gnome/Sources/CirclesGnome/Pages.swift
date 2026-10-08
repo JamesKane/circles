@@ -38,35 +38,47 @@ final class StreamPage {
     private let status = UI.label("", classes: ["dim-label"], xalign: 0.5)
     private let empty = UI.label("Nothing here yet. Post something, or sync with your circles.", classes: ["dim-label"], wrap: true, xalign: 0.5)
     private let filter: Widget
+    private let network: NetworkModel
+    private let networkStatus = UI.label("", classes: ["caption", "dim-label"], xalign: 0.5)
     private var rows: [ContentID: PostView] = [:]
     private var order: [ContentID] = []
     private var filters: [StreamFilter] = []
 
-    init(model: StreamScreenModel, media: MediaLoader, app: AppController) {
+    init(model: StreamScreenModel, media: MediaLoader, network: NetworkModel, app: AppController) {
         self.model = model
         self.media = media
+        self.network = network
         self.app = app
         filter = gtk_drop_down_new_from_strings(nil)!
-        let content = UI.vbox(spacing: 12, [status, empty, list])
+        let content = UI.vbox(spacing: 12, [networkStatus, status, empty, list])
         UI.setMargins(content, 12)
         widget = page(
             title: "Stream",
             content: UI.scrolled(UI.clamp(content)),
             headerStart: [
-                UI.button(icon: "view-refresh-symbolic", tooltip: "Sync") { model.send(.sync) },
+                UI.button(icon: "view-refresh-symbolic", tooltip: "Sync now") { app.syncNow() },
                 filter,
             ],
             headerEnd: [
                 UI.button(icon: "document-edit-symbolic", tooltip: "New post") { app.compose() },
+                UI.button(icon: "preferences-system-symbolic", tooltip: "Settings") { app.showSettings() },
                 UI.button(icon: "system-users-symbolic", tooltip: "Circles") { app.showCircles() },
+                UI.button(icon: "contact-new-symbolic", tooltip: "People") { app.showPeople() },
             ]
         )
-        connect(filter, "notify::selected") { [unowned self] _ in
+        onNotify(filter, property: "selected") { [unowned self] in
             let index = Int(gtk_drop_down_get_selected(g(filter)))
             guard filters.indices.contains(index), filters[index] != model.state.filter else { return }
             model.send(.selectFilter(filters[index]))
         }
         observe { [weak self] in self?.render() }
+        // "synced 2 min" ages; refresh the status line now and then.
+        Task { @MainActor [weak self] in
+            while let self {
+                UI.setText(self.networkStatus, self.network.state.summary())
+                try? await Task.sleep(for: .seconds(30))
+            }
+        }
     }
 
     private let media: MediaLoader
@@ -77,6 +89,7 @@ final class StreamPage {
 
     private func render() {
         let state = model.state
+        UI.setText(networkStatus, network.state.summary())
         UI.setText(status, phaseText(state.phase) ?? "")
         UI.setVisible(status, phaseText(state.phase) != nil)
         UI.setVisible(empty, state.cards.isEmpty && state.phase == .idle)

@@ -57,6 +57,11 @@ public actor Account {
         return try await open(home: home)
     }
 
+    /// Whether `home` holds an account.
+    public static func exists(home: URL) -> Bool {
+        FileManager.default.fileExists(atPath: Files(home: home).keys.path)
+    }
+
     public static func open(home: URL) async throws -> Account {
         let files = Files(home: home)
         guard let keys = try files.load(StoredKeys.self, from: files.keys),
@@ -492,6 +497,7 @@ struct Files {
     var circles: URL { account.appendingPathComponent("circles.cbor") }
     var keyring: URL { account.appendingPathComponent("keyring.cbor") }
     var clock: URL { account.appendingPathComponent("clock.cbor") }
+    var preferences: URL { account.appendingPathComponent("preferences.cbor") }
     /// IDs of contributions already republished into our threads.
     var threads: URL { account.appendingPathComponent("threads.cbor") }
 

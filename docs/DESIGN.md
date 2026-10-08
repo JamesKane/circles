@@ -554,10 +554,14 @@ Enforcement:
   - rich text becomes Pango markup, design tokens become libadwaita style classes, and `PlatformServices` uses GtkFileDialog, the clipboard and GNotification
 - **Verification:** `CirclesGnome --snapshot DIR` drives the real app through Stream, post, Circles and composer, and renders each to PNG with GTK's own renderer (only this window, never the screen). It then **activates the real Post and +1 buttons** and checks the shared model state changed: GTK signal → intent → Account → SQLite → re-render.
 - **Found through the GNOME work:** the presentation layer labelled a post with no audience chosen as "Public". It's fixed for every UI, with a test. Desktops using another icon theme (e.g. Breeze) lack some Adwaita icon names, so the app bundles its own icons.
-- **Not yet in the app:**
-  - accepting incoming syncs (listener, mDNS, relays); the app has a Sync button, and `circles serve` still does serving
-  - onboarding (creating an account or adding contacts in the UI)
-  - pod and relay settings
+- **Completed (2026-10-08):** the app now runs on its own, without the CLI.
+  - **Staying online:** `CirclesKit.NodeService` (listener, mDNS, relay reservations, optional router port mapping, periodic sync) is shared by the app and `circles serve`. Network preferences are saved with the account.
+  - **New screen models** in `CirclesPresentation`, which any UI can use:
+    - `NetworkModel`: status line, activity log, and a `newContentCount` that UIs use to refresh the Stream after any sync
+    - `OnboardingScreenModel`, `PeopleScreenModel` (invite exchange) and `SettingsScreenModel` (identity, pods, relays)
+  - **New GNOME pages** for each, and quitting stops the network first, so the mDNS goodbye and port-mapping removal go out.
+  - **The self-test** (`--snapshot` on an empty home) walks the first-run journey through real widgets: onboarding, adding a contact by pasting their invite, an **incoming sync updating the Stream on its own**, settings, posting, and +1.
+- **Wrapper lesson:** GObject `notify::` signals have an extra parameter. `GtkKit.onNotify` handles them, and the plain `connect` refuses them, after a mismatched handler crashed the Settings page.
 
 #### Main-thread integration
 

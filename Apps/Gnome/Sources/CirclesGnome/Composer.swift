@@ -60,15 +60,15 @@ final class ComposerDialog {
             let text = String(cString: gtk_text_buffer_get_text(buffer, &start, &end, 0))
             if text != model.state.text { model.send(.editText(text)) }
         }
-        connect(everyone, "notify::active") { [unowned self] _ in
+        onNotify(everyone, property: "active") { [unowned self] in
             let on = gtk_switch_get_active(g(everyone)) != 0
             if on != model.state.shareWithEveryone { model.send(.setShareWithEveryone(on)) }
         }
-        connect(allowComments, "notify::active") { [unowned self] _ in
+        onNotify(allowComments, property: "active") { [unowned self] in
             let on = gtk_switch_get_active(g(allowComments)) != 0
             if on != model.state.allowComments { model.send(.setAllowComments(on)) }
         }
-        connect(allowResharing, "notify::active") { [unowned self] _ in
+        onNotify(allowResharing, property: "active") { [unowned self] in
             let on = gtk_switch_get_active(g(allowResharing)) != 0
             if on != model.state.allowResharing { model.send(.setAllowResharing(on)) }
         }

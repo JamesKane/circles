@@ -12,7 +12,9 @@ final class AppController {
     let application: UnsafeMutablePointer<AdwApplication>
     private(set) var window: Widget!
     private var navigation: Widget!
-    private var account: Account?
+    private(set) var account: Account?
+    private(set) var network: NetworkModel?
+    private(set) var onboarding: OnboardingPage?
     private var stream: StreamPage?
     private var pages: [AnyObject] = [] // keeps page controllers alive
     private var composer: ComposerDialog?
@@ -27,23 +29,92 @@ final class AppController {
         window = adw_application_window_new(g(application))!
         gtk_window_set_title(g(window), "Circles")
         gtk_window_set_default_size(g(window), 760, 900)
-        do {
-            let account = try await Account.open(home: home)
-            self.account = account
-            navigation = adw_navigation_view_new()!
-            let stream = StreamPage(model: StreamScreenModel(account: account), media: MediaLoader(account: account), app: self)
-            self.stream = stream
-            adw_navigation_view_push(g(navigation), g(stream.widget))
-            adw_application_window_set_content(g(window), navigation)
-            stream.model.send(.refresh)
-        } catch {
-            let status = adw_status_page_new()!
-            adw_status_page_set_icon_name(g(status), "system-users-symbolic")
-            adw_status_page_set_title(g(status), "No Circles account yet")
-            adw_status_page_set_description(g(status), "Create one with `circles init --name <your name>`, then reopen Circles.\n\(home.path)")
-            adw_application_window_set_content(g(window), status)
+        if Account.exists(home: home) {
+            do {
+                await start(try await Account.open(home: home))
+            } catch {
+                let status = adw_status_page_new()!
+                adw_status_page_set_icon_name(g(status), "dialog-error-symbolic")
+                adw_status_page_set_title(g(status), "Couldn't open your account")
+                adw_status_page_set_description(g(status), "\(error)\n\(home.path)")
+                adw_application_window_set_content(g(window), status)
+            }
+        } else {
+            let onboarding = OnboardingPage(model: OnboardingScreenModel(home: home)) { [weak self] account in
+                Task { @MainActor in await self?.start(account) }
+            }
+            self.onboarding = onboarding
+            adw_application_window_set_content(g(window), onboarding.widget)
         }
         gtk_window_present(g(window))
+    }
+
+    /// Builds the main UI and goes online.
+    private func start(_ account: Account) async {
+        guard self.account == nil else { return }
+        self.account = account
+        onboarding = nil
+        let network = NetworkModel(account: account)
+        self.network = network
+        navigation = adw_navigation_view_new()!
+        let stream = StreamPage(model: StreamScreenModel(account: account), media: MediaLoader(account: account), network: network, app: self)
+        self.stream = stream
+        adw_navigation_view_push(g(navigation), g(stream.widget))
+        adw_application_window_set_content(g(window), navigation)
+        stream.model.send(.refresh)
+        network.send(.start)
+        // New content from any sync, incoming or outgoing, refreshes the Stream.
+        var seen = 0
+        observe { [weak stream, weak network] in
+            guard let network, let stream else { return }
+            let count = network.state.newContentCount
+            if count != seen {
+                seen = count
+                stream.model.send(.refresh)
+            }
+        }
+    }
+
+    func syncNow() {
+        guard let network, let stream else { return }
+        Task { @MainActor in
+            await network.perform(.syncNow)
+            await stream.model.perform(.refresh)
+        }
+    }
+
+    @discardableResult
+    func showPeople() -> PeoplePage? {
+        guard let account else { return nil }
+        let page = PeoplePage(model: PeopleScreenModel(account: account, services: GnomeServices(window: window)))
+        pages.append(page)
+        adw_navigation_view_push(g(navigation), g(page.widget))
+        return page
+    }
+
+    @discardableResult
+    func showSettings() -> SettingsPage? {
+        guard let account, let network else { return nil }
+        let page = SettingsPage(settings: SettingsScreenModel(account: account, services: GnomeServices(window: window)), network: network)
+        pages.append(page)
+        adw_navigation_view_push(g(navigation), g(page.widget))
+        return page
+    }
+
+    /// Stops the network before exit, so the mDNS goodbye and port-mapping
+    /// removal go out. Runs the GTK main context while waiting, because our
+    /// main-actor work runs inside it.
+    func shutdown() {
+        guard let network else { return }
+        var stopped = false
+        Task { @MainActor in
+            await network.perform(.stop)
+            stopped = true
+        }
+        let deadline = ContinuousClock.now + .seconds(3)
+        while !stopped && ContinuousClock.now < deadline {
+            g_main_context_iteration(nil, 1)
+        }
     }
 
     var streamModel: StreamScreenModel? { stream?.model }
@@ -151,7 +222,10 @@ enum CirclesGnome {
     static func main() {
         MainLoop.integrateSwiftMainActor()
         let arguments = CommandLine.arguments
-        let snapshotDirectory = arguments.firstIndex(of: "--snapshot").flatMap { arguments.indices.contains($0 + 1) ? arguments[$0 + 1] : nil }
+        func option(_ name: String) -> String? {
+            arguments.firstIndex(of: name).flatMap { arguments.indices.contains($0 + 1) ? arguments[$0 + 1] : nil }
+        }
+        let snapshotDirectory = option("--snapshot"), photo = option("--photo")
         let home = ProcessInfo.processInfo.environment["CIRCLES_HOME"].map(URL.init(fileURLWithPath:))
             ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".circles")
 
@@ -168,11 +242,12 @@ enum CirclesGnome {
                 await controller.activate(home: home)
                 g_application_release(g(application))
                 if let snapshotDirectory {
-                    await Snapshot.run(controller, into: snapshotDirectory)
+                    await Snapshot.run(controller, into: snapshotDirectory, photo: photo)
                     g_application_quit(g(application))
                 }
             }
         }
+        connect(application, "shutdown") { controller.shutdown() }
         // GTK must not see our own arguments.
         exit(g_application_run(g(application), 0, nil))
     }

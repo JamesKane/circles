@@ -22,72 +22,37 @@ struct Serve: AsyncParsableCommand {
 
     func run() async throws {
         let account = try await global.open()
-        let (port, interval, mapPort, publishDirect, advertise) = (self.port, self.interval, self.mapPort, self.publishDirect, !self.noAdvertise)
+        // Flags override the saved preferences for this run.
+        var preferences = try await account.preferences()
+        if port != 0 { preferences.port = port }
+        preferences.syncIntervalSeconds = interval
+        if mapPort { preferences.mapRouterPort = true }
+        if publishDirect { preferences.publishPublicAddress = true }
+        if noAdvertise { preferences.advertiseOnLocalNetwork = false }
+        let name = await account.displayName
+        let options = preferences
         try await runUntilInterrupted {
-            let listener = try await NoiseListener(port: port, handshake: await account.makeHandshake(role: .responder))
-            say("Serving \(await account.displayName) on port \(listener.port). Ctrl-C to stop.")
-            try await withThrowingTaskGroup(of: Void.self) { group in
-                group.addTask {
-                    try await listener.run { session in
-                        let report = try await account.syncEngine().run(over: session)
-                        try await account.absorbKeyGrants()
-                        let name = await report.peer.asyncMap { await account.name(of: $0) } ?? "?"
-                        say(describe(report, peerName: name, direction: "incoming"))
-                    }
-                }
-                if advertise { group.addTask {
-                    do {
-                        try await MulticastDNS.advertise(await account.advertisement(port: listener.port))
-                    } catch is CancellationError {
-                    } catch {
-                        say("mDNS advertising unavailable (\(error)).")
-                    }
-                } }
-                for relay in await account.endpoints.relays {
-                    group.addTask { await holdReservation(on: relay, for: account) }
-                }
-                if mapPort {
-                    group.addTask {
-                        await PortMapper.keepPortMapped(tcpPort: listener.port, onChange: { mapping in
-                            if let mapping {
-                                say("Port mapped with \(mapping.method.rawValue): \(mapping.externalAddress ?? "?"):\(mapping.externalPort)")
-                            } else {
-                                say("Port mapping removed.")
-                            }
-                            guard publishDirect else { return }
-                            try? await account.setDirectEndpoint(host: mapping?.externalAddress, port: mapping?.externalPort ?? 0)
-                        }, onError: { error in
-                            say("Port mapping unavailable: \(error)")
-                        })
-                    }
-                }
-                group.addTask {
-                    while true {
-                        await printAttempts(await account.syncAll(), account: account)
-                        try await Task.sleep(for: .seconds(interval))
-                    }
-                }
-                try await group.waitForAll()
+            try await NodeService(account: account).run(options) { event in
+                if let line = describe(event, name: name) { say(line) }
             }
         }
     }
 }
 
-/// Keeps a reservation on a relay, reconnecting after failures.
-func holdReservation(on relay: RelayEndpoint, for account: Account) async {
-    while !Task.isCancelled {
-        do {
-            try await account.serveViaRelay(relay, onReserved: {
-                say("Reachable through relay \(relay.host):\(relay.port).")
-            }, onSync: { report in
-                say(describe(report, peerName: "a peer via relay", direction: "incoming"))
-            })
-        } catch is CancellationError {
-            return
-        } catch {
-            say("Relay \(relay.host):\(relay.port) unavailable (\(error)); retrying in 30s.")
-        }
-        try? await Task.sleep(for: .seconds(30))
+/// One log line per node event (nil for ones not worth a line).
+func describe(_ event: NodeEvent, name: String) -> String? {
+    switch event {
+    case .listening(let port): "Serving \(name) on port \(port). Ctrl-C to stop."
+    case .advertising: nil
+    case .advertisingUnavailable(let reason): "mDNS advertising unavailable (\(reason))."
+    case .reachableViaRelay(let relay): "Reachable through relay \(relay)."
+    case .relayUnavailable(let relay, let reason): "Relay \(relay) unavailable (\(reason)); retrying in 30s."
+    case .portMapped(let external): "Port mapped: \(external)"
+    case .portMappingRemoved: "Port mapping removed."
+    case .portMappingUnavailable(let reason): "Port mapping unavailable: \(reason)"
+    case .synced(let peer, let direction, let received, let sent): "Synced with \(peer) (\(direction.rawValue)): received \(received), sent \(sent)"
+    case .syncFailed(let route, let reason): "Could not sync with \(route): \(reason)"
+    case .syncRoundFinished: nil
     }
 }
 

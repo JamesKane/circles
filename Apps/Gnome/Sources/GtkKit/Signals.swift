@@ -13,6 +13,9 @@ private final class SignalHandler: @unchecked Sendable {
 /// GTK emits signals on the main thread, so the closure runs on the main actor.
 @discardableResult
 public func connect(_ instance: some GPointerConvertible, _ signal: String, _ action: @escaping @MainActor () -> Void) -> UInt {
+    // "notify::x" handlers take (object, GParamSpec*, user_data); using this
+    // two-argument form would read the GParamSpec as user data and crash.
+    precondition(!signal.hasPrefix("notify"), "use onNotify(_:property:_:) for \(signal)")
     let handler = Unmanaged.passRetained(SignalHandler(action)).toOpaque()
     let trampoline: @convention(c) (UnsafeMutableRawPointer?, UnsafeMutableRawPointer?) -> Void = { _, data in
         let handler = Unmanaged<SignalHandler>.fromOpaque(data!).takeUnretainedValue()
@@ -87,4 +90,10 @@ public func g(_ pointer: some GPointerConvertible) -> OpaquePointer {
 @inlinable
 public func g(_ pointer: some GPointerConvertible) -> UnsafeMutableRawPointer {
     pointer.gpointer
+}
+
+/// Runs `action` whenever a GObject property changes ("notify::property").
+@discardableResult
+public func onNotify(_ instance: some GPointerConvertible, property: String, _ action: @escaping @MainActor () -> Void) -> UInt {
+    connect(instance, "notify::" + property) { (_: UnsafeMutableRawPointer?) in action() }
 }
