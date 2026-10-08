@@ -452,7 +452,7 @@ Rule: no Foundation-only APIs in `CirclesCore`/`CirclesCrypto`/`CirclesSync`. Us
 |---|---|---|---|
 | macOS / iOS / iPadOS / visionOS | ✅ | macOS only | Background limits on iOS → push relay |
 | Linux (x86_64, aarch64) | ✅ (desktop) | ✅ primary | Static Linux SDK for single-binary pods |
-| Windows | ✅ | ✅ | Verify NIO + SQLite + DPAPI shims |
+| Windows | ✅ | ✅ | Builds in CI (SQLite via the built-in `winsqlite3`); 137/138 tests pass. **Open:** relayed sessions end early on Windows (the relay end-to-end test is disabled there until debugged on a Windows machine). DPAPI secret store not done. |
 | Android | ✅ | — | Swift SDK for Android; Kotlin/Compose UI |
 | WebAssembly | Read-only/light client | — | No raw sockets; WebSocket/WebTransport to a pod |
 
