@@ -1,0 +1,48 @@
+# Flatpak manifest for the GNOME app.
+#
+#   flatpak-builder --user --install --force-clean build-dir Apps/Gnome/dev.circles.Circles.yml
+#
+# Status (2026-10-08): written against Flathub's GNOME 51 runtime and the
+# swift6 SDK extension (26.08 branch), but NOT yet built: flatpak-builder
+# wasn't available on the machine where this was written. To check before
+# relying on it:
+#   - the swift6 extension's Swift version must be 6.3 or later;
+#   - SwiftPM fetches dependencies during the build, which needs
+#     --share=network at build time (fine locally, not allowed on Flathub);
+#     Flathub needs the dependencies vendored as module sources instead.
+#
+# Inside the sandbox, $HOME is ~/.var/app/dev.circles.Circles, so the app
+# keeps its own identity there, separate from the CLI's ~/.circles.
+id: dev.circles.Circles
+runtime: org.gnome.Platform
+runtime-version: '51'
+sdk: org.gnome.Sdk
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.swift6
+command: circles-gnome
+finish-args:
+  - --share=network        # peer-to-peer sync, mDNS discovery, relays
+  - --share=ipc
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --device=dri
+build-options:
+  append-path: /usr/lib/sdk/swift6/bin
+  prepend-ld-library-path: /usr/lib/sdk/swift6/lib
+  build-args:
+    - --share=network      # SwiftPM dependency fetch; see the note above
+modules:
+  - name: circles
+    buildsystem: simple
+    sources:
+      - type: dir
+        path: ../..
+    build-commands:
+      - swift build -c release --static-swift-stdlib --package-path Apps/Gnome --product CirclesGnome
+      - install -Dm755 "$(swift build -c release --package-path Apps/Gnome --show-bin-path)/CirclesGnome" /app/lib/circles-gnome/CirclesGnome
+      - cp -R "$(swift build -c release --package-path Apps/Gnome --show-bin-path)/CirclesGnome_CirclesGnome.resources" /app/lib/circles-gnome/
+      - install -d /app/bin && ln -s /app/lib/circles-gnome/CirclesGnome /app/bin/circles-gnome
+      - install -Dm644 Apps/Gnome/data/dev.circles.Circles.desktop /app/share/applications/dev.circles.Circles.desktop
+      - install -Dm644 Apps/Gnome/data/dev.circles.Circles.metainfo.xml /app/share/metainfo/dev.circles.Circles.metainfo.xml
+      - install -Dm644 Apps/Gnome/Sources/CirclesGnome/Icons/hicolor/scalable/apps/dev.circles.Circles.svg /app/share/icons/hicolor/scalable/apps/dev.circles.Circles.svg
+      - install -Dm644 Apps/Gnome/Sources/CirclesGnome/Icons/hicolor/symbolic/apps/dev.circles.Circles-symbolic.svg /app/share/icons/hicolor/symbolic/apps/dev.circles.Circles-symbolic.svg

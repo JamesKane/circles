@@ -9,6 +9,8 @@ public enum ContentKind: UInt64, Sendable, Hashable, Codable {
     /// A comment or reaction, republished by the post's author to the post's
     /// audience (docs/DESIGN.md §9.4).
     case threadItem = 3
+    /// The author withdrawing a post, or a comment from their thread.
+    case deletion = 4
 
     /// The signature label a content object of this kind is signed under.
     public var label: SignatureLabel {
@@ -17,6 +19,7 @@ public enum ContentKind: UInt64, Sendable, Hashable, Codable {
         case .comment: .comment
         case .reaction: .reaction
         case .threadItem: .threadItem
+        case .deletion: .deletion
         }
     }
 }

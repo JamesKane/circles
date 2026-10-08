@@ -69,6 +69,14 @@ Apps/Gnome/.build/debug/CirclesGnome   # uses $CIRCLES_HOME or ~/.circles
 
 The app walks you through creating an identity, exchanging invites, circles, pods and relays, and stays online while it's open (no `circles serve` needed).
 
+To install it for your user (desktop entry, icon, and a `circles-gnome` command; only GTK 4, libadwaita and SQLite are needed at run time):
+
+```sh
+Apps/Gnome/install.sh              # into ~/.local; --uninstall to remove
+```
+
+A Flatpak manifest is in `Apps/Gnome/dev.circles.Circles.yml` (not yet built; see the notes in it).
+
 ### macOS app
 
 In progress. Needs Xcode 27 (Swift 6.4). Open `Apps/Apple/Circles.xcodeproj`, or:
@@ -77,7 +85,7 @@ In progress. Needs Xcode 27 (Swift 6.4). Open `Apps/Apple/Circles.xcodeproj`, or
 xcodebuild -project Apps/Apple/Circles.xcodeproj -scheme Circles build
 ```
 
-The app is sandboxed and keeps its data in its container's Application Support folder. So far it creates or opens your identity and stays online; the Stream and the other screens come next.
+The app is sandboxed and keeps its data in its container's Application Support folder. So far it has onboarding, the Stream, posts with comments, +1s and resharing, and the composer; People, Circles and Settings come next.
 
 ## Layout
 

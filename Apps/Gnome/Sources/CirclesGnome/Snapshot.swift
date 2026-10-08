@@ -17,6 +17,7 @@ import CirclesPresentation
 enum Snapshot {
     static func run(_ app: AppController, into directory: String, photo: String?) async {
         try? FileManager.default.createDirectory(atPath: directory, withIntermediateDirectories: true)
+        app.notifier.deliver = false // record notifications; never pop them onto the desktop
         if let onboarding = app.onboarding {
             await save(app, "0-onboarding", in: directory)
             onboarding.fill(name: "Alice Liddell")
@@ -47,6 +48,14 @@ enum Snapshot {
             people.paste(invite: invite)
             check(await waitFor { people.model.state.people.map(\.name) == ["Bob Marley"] }, "pasting Bob's invite on the People page added him")
             await save(app, "2-people", in: directory)
+            if let dialog = await people.pressRemove(bob.user) {
+                await save(app, "2b-remove-confirmation", in: directory)
+                adw_dialog_close(g(dialog)) // Cancel
+                try? await Task.sleep(for: .milliseconds(300))
+                check(people.model.state.people.count == 1, "cancelling the Remove confirmation kept Bob")
+            } else {
+                check(false, "the Remove button opened a confirmation")
+            }
             app.back()
         }
 
@@ -58,6 +67,22 @@ enum Snapshot {
         _ = try? await bob.sync(host: "127.0.0.1", port: port)
         check(await waitFor { app.streamModel?.state.cards.contains { $0.authorName == "Bob Marley" } == true },
               "an incoming sync from Bob updated the Stream without a refresh")
+        check(app.streamModel?.state.arrivals.map(\.title) == ["Bob Marley posted"], "Bob's post was reported as an arrival")
+        // The window is focused here, so nothing was sent; deliver as if unfocused.
+        if let arrivals = app.streamModel?.state.arrivals {
+            app.notifier.notify(arrivals, windowIsActive: false)
+        }
+        if let notification = app.notifier.sent.last {
+            check(notification.title == "Bob Marley posted", "an unfocused window gets a notification for Bob's post")
+            let before = app.openedPosts.count
+            app.notifier.activate(target: notification.target)
+            check(app.openedPosts.count == before + 1 && app.openedPosts.last?.author == bob.user,
+                  "activating the notification opened Bob's post")
+            await save(app, "3b-opened-from-notification", in: directory)
+            app.back()
+        } else {
+            check(false, "a notification was produced")
+        }
         await save(app, "3-stream-incoming", in: directory)
 
         app.showSettings()
@@ -105,6 +130,26 @@ enum Snapshot {
             check(await waitFor { app.streamModel?.state.cards.first { $0.id == first.id }?.plusOnedByMe == !before },
                   "pressing +1 toggled the post's +1")
             await save(app, "7-after-interactions", in: directory)
+        }
+
+        // Deleting our own post: the confirmation, cancelling it, then deleting.
+        if let mine = app.streamModel?.state.cards.first(where: { $0.canDelete }), let row = app.streamPage?.row(for: mine.id) {
+            if let dialog = await row.pressDelete() {
+                await save(app, "8-delete-confirmation", in: directory)
+                adw_dialog_close(g(dialog)) // Cancel
+                try? await Task.sleep(for: .milliseconds(300))
+                check(app.streamModel?.state.cards.contains { $0.id == mine.id } == true, "cancelling Delete kept the post")
+            } else {
+                check(false, "the Delete button opened a confirmation")
+            }
+            if let account = app.account {
+                let post = PostScreenModel(post: mine.reference, account: account)
+                await post.perform(.load)
+                await post.perform(.delete)
+                app.streamModel?.send(.refresh)
+                check(await waitFor { app.streamModel?.state.cards.contains { $0.id == mine.id } == false },
+                      "deleting the post removed it from the Stream")
+            }
         }
     }
 
