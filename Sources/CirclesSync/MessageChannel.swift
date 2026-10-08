@@ -9,9 +9,15 @@ public protocol MessageChannel: Sendable {
     /// The X25519 static key the peer proved possession of during the
     /// handshake, if the transport authenticates peers.
     var remoteStaticKey: AgreementPublicKey? { get }
+    /// The peer's IP address as the connection saw it, when there is one.
+    var remoteHost: String? { get }
     func send(_ message: [UInt8]) async throws
     /// The next message, or nil once the peer has closed the channel.
     func receive() async throws -> [UInt8]?
+}
+
+extension MessageChannel {
+    public var remoteHost: String? { nil }
 }
 
 /// One end of an in-memory `MessageChannel` pair.

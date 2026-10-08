@@ -14,7 +14,7 @@ struct Circles: AsyncParsableCommand {
         subcommands: [Init.self, WhoAmI.self, InviteCommand.self, ContactCommand.self, CircleCommand.self,
                       PostCommand.self, StreamCommand.self, Serve.self, SyncCommand.self, Peers.self,
                       PodCommand.self, RelayCommand.self, CommentCommand.self, PlusOneCommand.self,
-                      ReshareCommand.self, AttachmentCommand.self, CommunityCommand.self]
+                      ReshareCommand.self, AttachmentCommand.self, CommunityCommand.self, DHTCommand.self, PushCommand.self]
     )
 }
 
@@ -71,13 +71,25 @@ struct ContactCommand: AsyncParsableCommand {
                                                     subcommands: [Add.self, List.self])
 
     struct Add: AsyncParsableCommand {
-        static let configuration = CommandConfiguration(abstract: "Add a contact from their invite.")
+        static let configuration = CommandConfiguration(abstract: "Add a contact from their invite, or by user ID (found in the DHT).")
         @OptionGroup var global: Global
-        @Argument(help: "The invite text (circles-invite:…).") var invite: String
+        @Argument(help: "The invite text (circles-invite:…), or a user ID (circles:…).") var invite: String
         @Option(help: "A local name for them (defaults to the name in the invite).") var name: String?
 
         func run() async throws {
-            let contact = try await global.open().addContact(invite: invite, name: name)
+            let account = try await global.open()
+            let contact: Contact
+            if let user = UserID(invite.trimmingCharacters(in: .whitespacesAndNewlines)) {
+                print("Looking up \(user) in the DHT…")
+                _ = await account.maintainDHT()
+                do {
+                    contact = try await account.addContact(user: user, name: name)
+                } catch AccountError.notFoundInDHT {
+                    throw ValidationError("Couldn't find them in the DHT. Ask for an invite instead, or check `circles dht status`.")
+                }
+            } else {
+                contact = try await account.addContact(invite: invite, name: name)
+            }
             print("Added \(contact.name) (\(contact.user))")
         }
     }
