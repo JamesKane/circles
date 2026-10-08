@@ -306,6 +306,12 @@ public actor Account {
             ((try? Files.loadStatic([CommunityState].self, from: communitiesURL)) ?? [])
                 .filter { $0.role == .member || $0.role == .pending }.map(\.community)
         }
+        // Communities we sequence: our pods keep their logs and members'
+        // submissions, so with our own devices we exchange those too.
+        let ownedLogs: @Sendable () -> [UserID] = {
+            ((try? Files.loadStatic([CommunityState].self, from: communitiesURL)) ?? [])
+                .filter { $0.role == .owner }.flatMap { [$0.community] + $0.roster }
+        }
         return SyncEngine(
             store: store,
             identityDocument: identityDocument,
@@ -313,7 +319,7 @@ public actor Account {
                 isAllowed: { peer in
                     peer.user == me || currentContacts().contains(peer.user) || currentCommunities().contains(peer.user)
                 },
-                interests: { currentContacts() + currentCommunities() + [me] },
+                interests: { currentContacts() + currentCommunities() + ownedLogs() + [me] },
                 outgoingControl: { peer in
                     if currentCommunities().contains(peer.user) {
                         return (try? await self.joinRequest(for: peer.user)).map { [$0] } ?? []
@@ -334,9 +340,10 @@ public actor Account {
     }
 
     /// The current contact list for our pods, signed by this device.
-    private func signedPodConfig() throws -> SignedObject {
+    private func signedPodConfig() async throws -> SignedObject {
         try reload()
-        let config = PodConfig(owner: user, version: wallClockMillis(), contacts: contacts.map(\.user))
+        let config = PodConfig(owner: user, version: wallClockMillis(), contacts: contacts.map(\.user),
+                               communities: try await podCommunities())
         return try SignedObject(encoding: config, label: .podConfig, with: device)
     }
 
@@ -514,6 +521,13 @@ public actor Account {
             guard let identity = try? await store.verifiedIdentity(for: state.community) else { continue }
             let name = state.decodedProfile?.name ?? "community"
             var done = false
+            // Pending members must reach the owner: pods don't take join requests.
+            for pod in identity.endpoints.pods where !done && state.role == .member {
+                let route = "\(name) on its pod at \(pod.host):\(pod.port)"
+                done = record(await tryRoute(route) {
+                    try await self.sync(host: pod.host, port: Int(pod.port), target: state.community)
+                })
+            }
             for direct in identity.endpoints.direct where !done {
                 let route = "\(name) at \(direct.host):\(direct.port)"
                 done = record(await tryRoute(route) {

@@ -197,35 +197,60 @@ extension Account {
         if visibility == .private {
             try saveGroup(try CommunityGroup.create(identity: user.multicodecBytes, groupID: community.multicodecBytes), for: community)
         }
+        try await refreshCommunityEndpoints()   // certifies our pods
         try await appendToLog(.community(.profile(signedProfile)), as: community)
         try await publish(.members(added: [user], removed: []), in: community)
         return community
     }
 
-    /// Where members reach a community: its sequencer's direct address and
-    /// our relays. (Our pods hold our logs, not the community's.)
+    /// Where members reach a community: our pods, its sequencer's direct
+    /// address, and our relays.
     static func communityEndpoints(from mine: Endpoints, device: DeviceID) -> Endpoints? {
         var endpoints = Endpoints()
+        endpoints.pods = mine.pods
         endpoints.direct = mine.direct.filter { $0.device == device }
         endpoints.relays = mine.relays
         return endpoints.isEmpty ? nil : endpoints
     }
 
     /// Re-signs our communities' identity documents when our own endpoints
-    /// change, so members can still find them.
+    /// or pods change, so members can still find them: our pods are
+    /// certified by each community as store-and-forward devices.
     func refreshCommunityEndpoints() async throws {
+        let mine = try VerifiedIdentity(verifying: identityDocument, for: user)
+        let pods = mine.certificates.values.filter { $0.capabilities.contains(.storeAndForward) }
         for state in try loadCommunities() where state.role == .owner {
             guard let rawKey = state.communityKey,
                   let signed = try await store.identityDocument(for: state.community)
             else { continue }
-            var document = try VerifiedIdentity(verifying: signed, for: state.community).document
+            let key = try IdentityKeyPair(rawRepresentation: rawKey)
+            let current = try VerifiedIdentity(verifying: signed, for: state.community)
+            var document = current.document
             let wanted = Self.communityEndpoints(from: endpoints, device: deviceID)
-            guard document.endpoints != wanted else { continue }
+            let missing = pods.filter { current.certificates[$0.device] == nil }
+            guard document.endpoints != wanted || !missing.isEmpty else { continue }
+            for pod in missing {
+                document.certificates.append(try DeviceCertificate.issue(
+                    device: pod.device, agreementKey: pod.agreementKey, by: key, capabilities: .storeAndForward,
+                    issuedMillis: wallClockMillis(), validForMillis: Self.certificateLifetime
+                ))
+            }
             document.endpoints = wanted
             document.version += 1
-            let resigned = try document.signed(by: try IdentityKeyPair(rawRepresentation: rawKey))
+            let resigned = try document.signed(by: key)
             try await store.saveIdentityDocument(resigned, verified: try VerifiedIdentity(verifying: resigned, for: state.community))
         }
+    }
+
+    /// What our pods need to serve our communities while we're away: each
+    /// community's identity document and who's in it.
+    func podCommunities() async throws -> [PodCommunity] {
+        var result: [PodCommunity] = []
+        for state in try loadCommunities() where state.role == .owner {
+            guard let document = try await store.identityDocument(for: state.community) else { continue }
+            result.append(PodCommunity(identityDocument: document, members: state.roster))
+        }
+        return result
     }
 
     /// The text to share so others can join. For invite-only communities,

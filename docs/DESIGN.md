@@ -273,13 +273,16 @@ Communities need many writers, moderators, and membership changes made by people
 - It has its own Ed25519 key, the "community key", held by the owner's device.
 - Its identity document certifies the community's *serving devices*: the owner's device as `.author`, and optionally pods as `.storeAndForward`. Its endpoints list pods and relays as usual.
 - So sync, verification, pods, relays and mDNS all work for communities unchanged: following a community is following its identity.
-- A device that serves a community runs one more listener that presents the community's identity document, the way pods present their owner's. The sync protocol doesn't change.
+- A device that serves a community presents the community's identity document, the way pods present their owner's. *As built:* rather than a second listener, the initiator's sync `hello` names a `target` identity (absent means the device's own user), and the responder reads that hello first and answers as the account or as a community it serves. One port, one mDNS advertisement and one relay reservation cover every identity on the device. Older peers never send a target, so they're unaffected.
+- The community's document lists the owner's pods, the sequencer's direct address and the owner's relays, and certifies the owner's pods. The owner re-signs it whenever its own endpoints or pods change.
 
 **One sequencer, one order.**
 - MLS needs one agreed sequence of commits. The community's log is written by a single **sequencer device** (the owner's), and that device's hash-linked log *is* the order. Commits, Welcomes and posts take effect in log order.
 - Only the sequencer commits. Members never commit; they ask the sequencer, which also handles leaving.
 - Members process the community log strictly in order, keep their MLS state (sealed snapshots, §8.3 pre-M5 task 3), and store each post **decrypted when processed**. Old epochs' keys are deliberately discarded, so later decryption isn't possible.
 - Pods certified for the community store and serve its log (ciphertext for private communities), so the community stays readable while the owner is offline. New posts and members wait for the sequencer.
+  - *As built:* the owner's signed pod configuration lists each community's identity document and roster. The pod serves the community only to the listed members, and keeps their logs so their submissions reach the owner on its next sync with the pod. The pod learns a private community's roster, a trade-off accepted because the pod is the owner's own device.
+  - Join requests aren't taken by pods: pending members must reach the owner (directly, on the local network or through a relay).
 - *Limitations:* a single sequencer is a single point of control and availability; no moderator roles beyond the owner yet; no post-compromise updates initiated by members.
 
 **Membership and joining.**

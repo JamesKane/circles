@@ -204,3 +204,60 @@ struct CommunityNodeTests {
         }
     }
 }
+
+@Suite("Communities through pods")
+struct CommunityPodTests {
+    @Test("the owner's pod carries a private community while the owner is offline")
+    func podServesCommunity() async throws {
+        let alice = try await Account.create(home: temporaryHome(), displayName: "Alice")
+        let bob = try await Account.create(home: temporaryHome(), displayName: "Bob")
+        let carol = try await Account.create(home: temporaryHome(), displayName: "Carol")
+        let (pod, _) = try await PodNode.create(home: temporaryHome(), host: "127.0.0.1", port: 0)
+        let listener = try await NoiseListener(host: "127.0.0.1", port: 0, handshake: await pod.makeHandshake(role: .responder))
+        try await pod.setAddress(host: "127.0.0.1", port: UInt16(listener.port))
+        _ = try await pod.pair(try await alice.addPod(await pod.pairingCode))
+        let podTask = Task { try await listener.run { session in _ = try await pod.respond(over: session) } }
+        defer { podTask.cancel() }
+
+        let community = try await alice.createCommunity(name: "Night owls", visibility: .private, joinPolicy: .open)
+        let invite = try await alice.communityInvite(community)
+        try await bob.joinCommunity(invite: invite)
+        try await carol.joinCommunity(invite: invite)
+        try await round(alice, community, bob, carol)   // joining needs the owner
+        #expect(try await bob.communities().first?.role == .member)
+
+        // Alice configures her pod, then goes offline.
+        _ = await alice.syncAll(discoveryTimeout: .milliseconds(10))
+        #expect(await pod.config?.communities?.first?.members.count == 3)
+
+        // Bob posts; only the pod is reachable, and it keeps his submission.
+        try await bob.post(RichText(plain: "up late"), toCommunity: community)
+        let attempts = await bob.syncAll(discoveryTimeout: .milliseconds(10))
+        #expect(attempts.contains { $0.route.contains("Night owls on its pod") && (try? $0.result.get()) != nil })
+
+        // Alice comes back: collects from her pod, republishes, and the pod carries it to Carol.
+        _ = await alice.syncAll(discoveryTimeout: .milliseconds(10))
+        #expect(try await feed(alice, community) == ["up late"])
+        _ = await alice.syncAll(discoveryTimeout: .milliseconds(10))
+        _ = await carol.syncAll(discoveryTimeout: .milliseconds(10))
+        #expect(try await feed(carol, community) == ["up late"])
+    }
+
+    @Test("a pod serves a community only to its members")
+    func podRefusesOutsiders() async throws {
+        let alice = try await Account.create(home: temporaryHome(), displayName: "Alice")
+        let mallory = try await Account.create(home: temporaryHome(), displayName: "Mallory")
+        let (pod, _) = try await PodNode.create(home: temporaryHome(), host: "127.0.0.1", port: 0)
+        let listener = try await NoiseListener(host: "127.0.0.1", port: 0, handshake: await pod.makeHandshake(role: .responder))
+        try await pod.setAddress(host: "127.0.0.1", port: UInt16(listener.port))
+        _ = try await pod.pair(try await alice.addPod(await pod.pairingCode))
+        let podTask = Task { try await listener.run { session in _ = try await pod.respond(over: session) } }
+        defer { podTask.cancel() }
+        let community = try await alice.createCommunity(name: "Members only", visibility: .public, joinPolicy: .approval)
+        _ = await alice.syncAll(discoveryTimeout: .milliseconds(10))
+        #expect(await pod.config?.communities?.count == 1)
+        await #expect(throws: (any Error).self) {
+            try await mallory.sync(host: "127.0.0.1", port: listener.port, target: community)
+        }
+    }
+}
