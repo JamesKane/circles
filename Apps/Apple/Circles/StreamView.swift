@@ -93,6 +93,7 @@ struct StreamView: View {
         ToolbarItem {
             Button("New Post", systemImage: "square.and.pencil") { composing = true }
                 .keyboardShortcut("n")
+                .accessibilityIdentifier("new-post")
         }
         ToolbarItem {
             if network.state.syncing || stream.state.phase == .syncing {

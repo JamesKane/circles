@@ -68,6 +68,7 @@ struct PostCardView: View {
             .tint(card.plusOnedByMe ? Style.color(.plusOneActive) : nil)
             .background(card.plusOnedByMe ? Style.color(.plusOneActive).opacity(0.15) : .clear, in: .capsule)
             .help(card.plusOnedByMe ? "Remove your +1" : "+1 this post")
+            .accessibilityIdentifier("plus-one")
             .accessibilityLabel(card.plusOnedByMe ? "Remove +1, \(card.plusOnes) total" : "+1, \(card.plusOnes) total")
 
             Button(action: onOpen) {
@@ -75,8 +76,9 @@ struct PostCardView: View {
             }
             .buttonStyle(.borderless)
             .foregroundStyle(.secondary)
-            .help(card.comments.isEmpty ? "Comment" : "\(card.comments.count) comments")
-            .accessibilityLabel(card.comments.isEmpty ? "Comment" : "\(card.comments.count) comments")
+            .help(card.comments.isEmpty ? "Comment" : (card.comments.count == 1 ? "1 comment" : "\(card.comments.count) comments"))
+            .accessibilityIdentifier("open-comments")
+            .accessibilityLabel(card.comments.isEmpty ? "Comment" : (card.comments.count == 1 ? "1 comment" : "\(card.comments.count) comments"))
             if card.canReshare {
                 Button("Reshare publicly", systemImage: "arrow.2.squarepath", action: onReshare)
                     .labelStyle(.iconOnly)

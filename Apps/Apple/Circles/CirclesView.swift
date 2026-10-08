@@ -28,8 +28,10 @@ struct CirclesView: View {
                         .labelsHidden()
                         .textFieldStyle(.roundedBorder)
                         .onSubmit(create)
+                        .accessibilityIdentifier("new-circle-field")
                     Button("Create", action: create)
                         .disabled(newCircle.trimmingCharacters(in: .whitespaces).isEmpty)
+                        .accessibilityIdentifier("create-circle")
                 }
             }
 
@@ -55,6 +57,7 @@ struct CirclesView: View {
                         }
                         .fixedSize()
                         .disabled(state.circles.isEmpty)
+                        .accessibilityIdentifier("circles-menu-\(contact.name)")
                     }
                 }
             } header: {

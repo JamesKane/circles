@@ -19,9 +19,9 @@ struct MainView: View {
     var body: some View {
         NavigationSplitView {
             List(selection: $section) {
-                Label("Stream", systemImage: "rectangle.stack").tag(Section.stream)
-                Label("People", systemImage: "person.2").tag(Section.people)
-                Label("Circles", systemImage: "circle.circle").tag(Section.circles)
+                Label("Stream", systemImage: "rectangle.stack").tag(Section.stream).accessibilityIdentifier("sidebar-stream")
+                Label("People", systemImage: "person.2").tag(Section.people).accessibilityIdentifier("sidebar-people")
+                Label("Circles", systemImage: "circle.circle").tag(Section.circles).accessibilityIdentifier("sidebar-circles")
             }
             .navigationSplitViewColumnWidth(min: 150, ideal: 170, max: 220)
         } detail: {
@@ -60,6 +60,7 @@ struct StatusBar: View {
         TimelineView(.periodic(from: .now, by: 30)) { context in
             HStack {
                 Text(network.state.summary(now: context.date))
+                    .accessibilityIdentifier("network-status")
                 Spacer()
                 Button("Activity", systemImage: "list.bullet.rectangle") { showingActivity.toggle() }
                     .labelStyle(.iconOnly)

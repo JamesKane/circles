@@ -39,9 +39,15 @@ final class AppModel {
     }
 
     /// Application Support (inside the sandbox container), or $CIRCLES_HOME,
-    /// which must also be inside the container.
+    /// which must also be inside the container. With CIRCLES_FRESH_HOME=1
+    /// (UI tests), a new empty directory each launch, so the app starts at
+    /// onboarding.
     static func defaultHome() -> URL {
-        if let path = ProcessInfo.processInfo.environment["CIRCLES_HOME"] {
+        let environment = ProcessInfo.processInfo.environment
+        if environment["CIRCLES_FRESH_HOME"] == "1" {
+            return URL.temporaryDirectory.appending(path: "circles-fresh-\(UUID().uuidString)", directoryHint: .isDirectory)
+        }
+        if let path = environment["CIRCLES_HOME"] {
             return URL(filePath: path, directoryHint: .isDirectory)
         }
         return URL.applicationSupportDirectory.appending(path: "Circles", directoryHint: .isDirectory)

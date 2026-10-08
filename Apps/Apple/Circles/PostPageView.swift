@@ -102,6 +102,7 @@ struct PostPageView: View {
                 .lineLimit(1...5)
                 .textFieldStyle(.roundedBorder)
                 .focused($commentFocused)
+                .accessibilityIdentifier("comment-field")
                 .onSubmit { model.send(.submitComment) }
             Button("Comment") { model.send(.submitComment) }
                 .disabled(!model.state.canSubmitComment)

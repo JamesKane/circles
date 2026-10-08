@@ -20,6 +20,7 @@ struct PeopleView: View {
                     .textSelection(.enabled)
                     .lineLimit(4)
                 Button("Copy My Invite", systemImage: "doc.on.doc") { model.send(.copyMyInvite) }
+                    .accessibilityIdentifier("copy-my-invite")
             } header: {
                 Text("Your invite")
             } footer: {
@@ -32,7 +33,9 @@ struct PeopleView: View {
                         .labelsHidden()
                         .textFieldStyle(.roundedBorder)
                         .onSubmit { model.send(.addContact) }
+                        .accessibilityIdentifier("invite-field")
                     Button("Add") { model.send(.addContact) }
+                        .accessibilityIdentifier("add-contact")
                         .disabled(!state.canAdd)
                 }
                 if let notice = state.notice {
