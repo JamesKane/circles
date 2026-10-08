@@ -10,6 +10,8 @@ final class MemoryNetwork: Sendable {
     private let nodes = Mutex<[AgreementPublicKey: DHTNode]>([:])
     private let offline = Mutex<Set<AgreementPublicKey>>([])
     let clock = Mutex<UInt64>(1_000_000)
+    /// Requests per receiving node, when a test wants to count them.
+    let recording = Mutex<[AgreementPublicKey: Int]>([:])
 
     func add(_ node: DHTNode, key: AgreementPublicKey) { nodes.withLock { $0[key] = node } }
     func setOffline(_ key: AgreementPublicKey, _ isOffline: Bool) {
@@ -17,6 +19,7 @@ final class MemoryNetwork: Sendable {
     }
 
     func deliver(_ request: DHTMessage, to contact: DHTContact, from sender: DHTContact) async throws -> DHTMessage {
+        recording.withLock { $0[contact.key, default: 0] += 1 }
         guard !offline.withLock({ $0.contains(contact.key) }), let node = nodes.withLock({ $0[contact.key] }) else {
             throw DHTError.unexpectedResponse
         }
@@ -194,6 +197,60 @@ struct DHTTests {
         await client.bootstrap([contacts[0]])
         #expect(await nodes[0].contacts.count == 1)
         #expect(await client.contacts.count == 2)
+    }
+
+    @Test("each requesting IP may store 60 records an hour")
+    func storeQuota() async throws {
+        let (network, nodes, _) = makeNetwork(1)
+        var accepted = 0
+        for _ in 0..<61 {
+            let document = try identityDocument(IdentityKeyPair(), version: 1, name: "x")
+            if await nodes[0].handle(.store(document, listenPort: nil), from: nil, observedHost: "203.0.113.5") == .stored(true) { accepted += 1 }
+        }
+        #expect(accepted == 60)
+        let other = try identityDocument(IdentityKeyPair(), version: 1, name: "y")
+        #expect(await nodes[0].handle(.store(other, listenPort: nil), from: nil, observedHost: "203.0.113.6") == .stored(true))
+        network.clock.withLock { $0 += 3600 * 1000 }
+        let later = try identityDocument(IdentityKeyPair(), version: 1, name: "z")
+        #expect(await nodes[0].handle(.store(later, listenPort: nil), from: nil, observedHost: "203.0.113.5") == .stored(true))
+    }
+
+    @Test("a full node keeps the records closest to it")
+    func eviction() async throws {
+        let key = DeviceKeyPair().agreementPublicKey
+        let node = DHTNode(key: key, listenPort: nil, transport: MemoryTransport(me: DHTContact(key: key, host: "h", port: 1), network: MemoryNetwork()),
+                           now: { 1 }, capacity: 3)
+        let me = NodeID(node: key)
+        // Documents sorted by how close their users' keys are to the node.
+        var documents: [(user: UserID, name: String, document: SignedObject)] = []
+        for index in 0..<8 {
+            let identity = IdentityKeyPair()
+            documents.append((identity.userID, "doc \(index)", try identityDocument(identity, version: 1, name: "doc \(index)")))
+        }
+        documents.sort { NodeID(user: $0.user).distance(to: me).lexicographicallyPrecedes(NodeID(user: $1.user).distance(to: me)) }
+        for entry in documents[3..<6] {
+            #expect(await node.handle(.store(entry.document, listenPort: nil), from: nil, observedHost: nil) == .stored(true))
+        }
+        // Farther than everything held: refused. Closer: replaces the farthest.
+        #expect(await node.handle(.store(documents[7].document, listenPort: nil), from: nil, observedHost: nil) == .stored(false))
+        #expect(await node.handle(.store(documents[0].document, listenPort: nil), from: nil, observedHost: nil) == .stored(true))
+        #expect(await node.recordCount == 3)
+        let evicted = await node.handle(.findValue(key: NodeID(user: documents[5].user), listenPort: nil), from: nil, observedHost: nil)
+        #expect(evicted.record == nil)
+        let closest = await node.handle(.findValue(key: NodeID(user: documents[0].user), listenPort: nil), from: nil, observedHost: nil)
+        #expect(name(in: closest.record) == documents[0].name)
+    }
+
+    @Test("disjoint lookup paths never ask the same node twice")
+    func disjointPaths() async throws {
+        let (network, nodes, contacts) = makeNetwork(80)
+        for node in nodes.dropFirst() { await node.bootstrap([contacts[0]]) }
+        network.recording.withLock { $0 = [:] }
+        let target = NodeID.random()
+        let result = await nodes[40].lookup(target, value: target, paths: 3)
+        let counts = network.recording.withLock { $0 }
+        #expect(!counts.isEmpty && counts.values.allSatisfy { $0 == 1 })
+        #expect(result.closest.count == DHTNode.k)
     }
 
     @Test("full buckets keep long-lived contacts; a failure promotes a waiting one")
