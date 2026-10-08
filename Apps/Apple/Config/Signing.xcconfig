@@ -1,0 +1,14 @@
+// Code signing for the Circles app.
+//
+// By default the app is signed to run locally (ad-hoc), so anyone can build
+// it. macOS's Local Network permission doesn't work reliably for ad-hoc
+// builds (the prompt may never appear, and the app's multicast is then
+// silently blocked), so for day-to-day use sign with your own team: copy
+// Local.xcconfig.example to Local.xcconfig, which git ignores, and set your
+// team ID in it.
+
+CODE_SIGN_STYLE = Manual
+CODE_SIGN_IDENTITY = -
+DEVELOPMENT_TEAM =
+
+#include? "Local.xcconfig"

@@ -77,6 +77,18 @@ Apps/Gnome/install.sh              # into ~/.local; --uninstall to remove
 
 A Flatpak manifest is in `Apps/Gnome/dev.circles.Circles.yml` (not yet built; see the notes in it).
 
+### macOS app
+
+In progress. Needs Xcode 27 (Swift 6.4). Open `Apps/Apple/Circles.xcodeproj`, or:
+
+```sh
+xcodebuild -project Apps/Apple/Circles.xcodeproj -scheme Circles build
+```
+
+It builds signed to run locally. To sign with your own team, which macOS needs before it reliably grants the app Local Network access, copy `Apps/Apple/Config/Local.xcconfig.example` to `Local.xcconfig` and set your team ID.
+
+The app is sandboxed and keeps its data in its container's Application Support folder. So far it has onboarding, the Stream, posts with comments, +1s and resharing, and the composer; People, Circles and Settings come next.
+
 ## Layout
 
 - `Sources/CirclesCore`: identifiers, deterministic CBOR, hybrid logical
@@ -91,6 +103,7 @@ A Flatpak manifest is in `Apps/Gnome/dev.circles.Circles.yml` (not yet built; se
 - `Sources/CirclesPresentation`: platform-neutral screen models every UI renders.
 - `Sources/circles-cli`, `circles-pod`, `circles-relay`: the command-line tools.
 - `Apps/Gnome`: the GNOME app (GTK 4 + libadwaita), a separate package.
+- `Apps/Apple`: the SwiftUI app (an Xcode project over the root package).
 
 ## License
 

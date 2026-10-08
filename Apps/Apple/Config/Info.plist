@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Keys Xcode can't generate from build settings. NodeService advertises
+	     and browses _circles._tcp with our own mDNS, so macOS asks for
+	     local network access on first launch (docs/DESIGN.md §7.2). -->
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Circles finds your contacts' devices on this network so you can sync with them directly.</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_circles._tcp</string>
+	</array>
+</dict>
+</plist>
