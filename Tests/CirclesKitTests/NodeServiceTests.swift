@@ -65,11 +65,12 @@ struct NodeServiceTests {
 
         // Only a join request travels: no log entries.
         _ = try await bob.sync(host: "127.0.0.1", port: listeningPort, target: community)
-        func reportedNews() -> Bool {
-            events.withLock { $0.contains { if case .synced(_, .incoming, let received, _) = $0 { received > 0 } else { false } } }
+        // Inline rather than a local function: capturing `events` in one
+        // after the service task took it fails region checks on Swift 6.3.
+        for _ in 0..<50 where !events.withLock({ $0.contains { if case .synced(_, .incoming, let received, _) = $0 { received > 0 } else { false } } }) {
+            try await Task.sleep(for: .milliseconds(20))
         }
-        for _ in 0..<50 where !reportedNews() { try await Task.sleep(for: .milliseconds(20)) }
-        #expect(reportedNews())
+        #expect(events.withLock { $0.contains { if case .synced(_, .incoming, let received, _) = $0 { received > 0 } else { false } } })
         #expect(try await alice.communities().first?.pendingRequests.map(\.user) == [bob.user])
     }
 
