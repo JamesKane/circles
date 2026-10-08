@@ -4,6 +4,7 @@ public import CirclesCrypto
 public import CirclesSync
 public import CirclesNet
 public import CirclesStorage
+public import CirclesDHT
 
 /// One user's node on one device: keys, contacts, circles, keyring and logs,
 /// stored under a home directory:
@@ -27,6 +28,8 @@ public actor Account {
     public private(set) var identityDocument: SignedObject
     public private(set) var contacts: [Contact] = []
     public private(set) var circles: [CircleRecord] = []
+    /// Our node in the DHT (docs/DESIGN.md §7.2).
+    public nonisolated let dht: DHTNode
 
     let identity: IdentityKeyPair
     let device: DeviceKeyPair
@@ -86,8 +89,13 @@ public actor Account {
         identityDocument = profile.identityDocument
         let state = try Self.loadState(Files(home: home), user: user)
         (contacts, circles, keyring, clock) = (state.contacts, state.circles, state.keyring, state.clock)
+        let reference = WeakAccount()
+        dht = DHTNode(key: device.agreementPublicKey, listenPort: nil,
+                      transport: NoiseDHTTransport { await reference.account?.makeHandshake(role: .initiator) },
+                      now: { wallClockMillis() })
         self.identity = identity
         self.device = device
+        reference.account = self
     }
 
     var files: Files { Files(home: home) }
@@ -139,8 +147,12 @@ public actor Account {
         let claimed = try CBORDecoder().decode(IdentityDocument.self, from: invite.identityDocument.payload)
         let verified = try VerifiedIdentity(verifying: invite.identityDocument, for: claimed.user)
         try await store.saveIdentityDocument(invite.identityDocument, verified: verified)
+        return try saveContact(Contact(user: verified.user, name: name ?? invite.name))
+    }
+
+    /// Adds or replaces a contact.
+    func saveContact(_ contact: Contact) throws -> Contact {
         try reload()
-        let contact = Contact(user: verified.user, name: name ?? invite.name)
         contacts.removeAll { $0.user == contact.user }
         contacts.append(contact)
         try files.save(contacts, to: files.contacts)
@@ -343,7 +355,7 @@ public actor Account {
     private func signedPodConfig() async throws -> SignedObject {
         try reload()
         let config = PodConfig(owner: user, version: wallClockMillis(), contacts: contacts.map(\.user),
-                               communities: try await podCommunities())
+                               communities: try await podCommunities(), push: pushTargets())
         return try SignedObject(encoding: config, label: .podConfig, with: device)
     }
 
@@ -447,13 +459,13 @@ public actor Account {
             outer: makeHandshake(role: .initiator), inner: makeHandshake(role: .responder),
             onReserved: onReserved
         ) { session in
-            let report = try await self.respond(over: session)
-            await onSync(report)
+            if let report = try await self.respond(over: session) { await onSync(report) }
         }
     }
 
     /// One sync attempt, for reporting.
     public struct SyncAttempt: Sendable {
+        public var succeeded: Bool { if case .success = result { true } else { false } }
         public var route: String
         public var result: Result<SyncReport, any Error>
     }
@@ -497,69 +509,61 @@ public actor Account {
             _ = record(await tryRoute(route) { try await self.sync(host: pod.host, port: Int(pod.port)) })
         }
 
+        let useDHT = (try? preferences().useDHT) ?? true
         for contact in contacts where !reached.contains(contact.user) {
-            guard let identity = try? await store.verifiedIdentity(for: contact.user) else { continue }
-            var done = false
-            for pod in identity.endpoints.pods where !done {
-                let route = "\(contact.name)'s pod at \(pod.host):\(pod.port)"
-                done = record(await tryRoute(route) { try await self.sync(host: pod.host, port: Int(pod.port)) })
-            }
-            for direct in identity.endpoints.direct where !done {
-                let route = "\(contact.name) at \(direct.host):\(direct.port)"
-                done = record(await tryRoute(route) { try await self.sync(host: direct.host, port: Int(direct.port)) })
-            }
-            let devices = identity.certificates.values.filter { $0.capabilities.contains(.author) }
-            for relay in identity.endpoints.relays where !done {
-                for device in devices where !done {
-                    let route = "\(contact.name) via relay \(relay.host):\(relay.port)"
-                    done = record(await tryRoute(route) { try await self.sync(via: relay, to: device.agreementKey) })
-                }
-            }
+            for attempt in await reach(contact.name, contact.user, target: nil, usePods: true, useDHT: useDHT) { _ = record(attempt) }
         }
-
         for state in joined where !reached.contains(state.community) {
-            guard let identity = try? await store.verifiedIdentity(for: state.community) else { continue }
-            let name = state.decodedProfile?.name ?? "community"
-            var done = false
             // Pending members must reach the owner: pods don't take join requests.
-            for pod in identity.endpoints.pods where !done && state.role == .member {
-                let route = "\(name) on its pod at \(pod.host):\(pod.port)"
-                done = record(await tryRoute(route) {
-                    try await self.sync(host: pod.host, port: Int(pod.port), target: state.community)
-                })
-            }
-            for direct in identity.endpoints.direct where !done {
-                let route = "\(name) at \(direct.host):\(direct.port)"
-                done = record(await tryRoute(route) {
-                    try await self.sync(host: direct.host, port: Int(direct.port), target: state.community)
-                })
-            }
-            let devices = identity.certificates.values.filter { $0.capabilities.contains(.author) }
-            for relay in identity.endpoints.relays where !done {
-                for device in devices where !done {
-                    let route = "\(name) via relay \(relay.host):\(relay.port)"
-                    done = record(await tryRoute(route) {
-                        try await self.sync(via: relay, to: device.agreementKey, identity: state.community)
-                    })
-                }
+            for attempt in await reach(state.decodedProfile?.name ?? "community", state.community, target: state.community,
+                                       usePods: state.role == .member, useDHT: useDHT) {
+                _ = record(attempt)
             }
         }
         try? await processCommunities()
         return attempts
     }
 
-    /// Answers an incoming session as ourselves, or as a community we
-    /// sequence if that's who the peer asked for, then absorbs what arrived.
-    public func respond(over channel: some MessageChannel) async throws -> SyncReport {
-        let me = user
-        let report = try await SyncEngine.respond(over: channel) { target in
-            guard let target, target != me else { return await self.syncEngine() }
-            guard (try? await self.community(target).role) == .owner else { return nil }
-            return try await self.communityEngine(target)
+    /// Tries a user's (or community's) routes until one works: pods, direct
+    /// addresses, then each author device through each relay. When all fail,
+    /// the DHT may hold a newer identity document with new addresses, which
+    /// are tried once.
+    private func reach(_ name: String, _ user: UserID, target: UserID?, usePods: Bool, useDHT: Bool) async -> [SyncAttempt] {
+        var attempts: [SyncAttempt] = []
+        let known = try? await store.verifiedIdentity(for: user)
+        if let known {
+            attempts += await routes(name, known, target: target, usePods: usePods)
+            if attempts.last?.succeeded == true { return attempts }
         }
-        try await absorbKeyGrants()
-        try await processCommunities()
-        return report
+        guard useDHT, let fresher = try? await lookUp(user), fresher.version > known?.version ?? 0 else { return attempts }
+        return attempts + (await routes(name + " (addresses from the DHT)", fresher, target: target, usePods: usePods))
+    }
+
+    private func routes(_ name: String, _ identity: VerifiedIdentity, target: UserID?, usePods: Bool) async -> [SyncAttempt] {
+        var attempts: [SyncAttempt] = []
+        if usePods {
+            for pod in identity.endpoints.pods {
+                let route = target == nil ? "\(name)'s pod at \(pod.host):\(pod.port)" : "\(name) on its pod at \(pod.host):\(pod.port)"
+                attempts.append(await tryRoute(route) { try await self.sync(host: pod.host, port: Int(pod.port), target: target) })
+                if attempts.last!.succeeded { return attempts }
+            }
+        }
+        for direct in identity.endpoints.direct {
+            attempts.append(await tryRoute("\(name) at \(direct.host):\(direct.port)") {
+                try await self.sync(host: direct.host, port: Int(direct.port), target: target)
+            })
+            if attempts.last!.succeeded { return attempts }
+        }
+        let devices = identity.certificates.values.filter { $0.capabilities.contains(.author) }
+        for relay in identity.endpoints.relays {
+            for device in devices {
+                attempts.append(await tryRoute("\(name) via relay \(relay.host):\(relay.port)") {
+                    try await self.sync(via: relay, to: device.agreementKey, identity: target)
+                })
+                if attempts.last!.succeeded { return attempts }
+            }
+        }
+        return attempts
     }
 
     private func tryRoute(_ route: String, _ operation: @Sendable () async throws -> SyncReport) async -> SyncAttempt {
@@ -599,6 +603,10 @@ struct Files {
     var keyring: URL { account.appendingPathComponent("keyring.cbor") }
     var clock: URL { account.appendingPathComponent("clock.cbor") }
     var preferences: URL { account.appendingPathComponent("preferences.cbor") }
+    /// This device's push relay registrations (docs/DESIGN.md §7.6).
+    var push: URL { account.appendingPathComponent("push.cbor") }
+    /// DHT nodes known at the last refresh, to rejoin through.
+    var dhtContacts: URL { account.appendingPathComponent("dht-nodes.cbor") }
     /// Communities we own or belong to (0600: holds community keys and MLS
     /// join secrets).
     var communities: URL { account.appendingPathComponent("communities.cbor") }

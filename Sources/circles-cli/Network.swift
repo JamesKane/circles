@@ -53,6 +53,9 @@ func describe(_ event: NodeEvent, name: String) -> String? {
     case .synced(let peer, let direction, let received, let sent): "Synced with \(peer) (\(direction.rawValue)): received \(received), sent \(sent)"
     case .syncFailed(let route, let reason): "Could not sync with \(route): \(reason)"
     case .syncRoundFinished: nil
+    case .dhtRefreshed(let nodes, let stored):
+        nodes == 0 ? "DHT: no nodes reachable yet (add one with `circles dht bootstrap add`)."
+                   : "DHT: \(nodes) node\(nodes == 1 ? "" : "s") known; identity stored on \(stored)."
     }
 }
 

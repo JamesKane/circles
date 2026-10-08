@@ -30,8 +30,8 @@ public final class RelayIdentity: Sendable {
         agreementKey = device.agreementPublicKey
     }
 
-    public func makeHandshake() -> NoiseHandshake {
-        NoiseHandshake(role: .responder, device: device)
+    public func makeHandshake(role: NoiseHandshake.Role = .responder) -> NoiseHandshake {
+        NoiseHandshake(role: role, device: device)
     }
 
     /// `host:port#key`, the string users paste into `circles relay add`.

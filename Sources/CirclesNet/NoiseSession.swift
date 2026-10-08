@@ -7,10 +7,14 @@ import NIOPosix
 public final class NoiseSession: MessageChannel {
     public let remoteStaticKey: AgreementPublicKey?
     public let handshakeHash: [UInt8]
+    /// The peer's IP address as this connection saw it; nil for relayed
+    /// sessions, where the connection's other end is the relay.
+    public let remoteHost: String?
     private let sender: Sender
     private let mailbox: Mailbox
 
-    fileprivate init(transport: NoiseTransport, sender: Sender, mailbox: Mailbox) {
+    fileprivate init(transport: NoiseTransport, sender: Sender, mailbox: Mailbox, remoteHost: String?) {
+        self.remoteHost = remoteHost
         remoteStaticKey = transport.remoteStaticKey
         handshakeHash = transport.handshakeHash
         self.sender = sender
@@ -139,7 +143,7 @@ func runSession<Result: Sendable>(
         let transport = try await performHandshake(handshake, frames: &frames, outbound: outbound,
                                                    underlying: channel.channel, timeout: timeout)
         return try await runEstablished(transport, frames: &frames, outbound: outbound,
-                                        underlying: channel.channel, body)
+                                        underlying: channel.channel, remoteHost: channel.channel.remoteAddress?.ipAddress, body)
     }
 }
 
@@ -184,10 +188,12 @@ func runEstablished<Result: Sendable>(
     frames: inout Frames,
     outbound: FrameWriter,
     underlying: any Channel,
+    remoteHost: String? = nil,
     _ body: @escaping @Sendable (NoiseSession) async throws -> Result
 ) async throws -> Result {
     let mailbox = Mailbox()
-    let session = NoiseSession(transport: transport, sender: Sender(cipher: transport.send, writer: outbound), mailbox: mailbox)
+    let session = NoiseSession(transport: transport, sender: Sender(cipher: transport.send, writer: outbound), mailbox: mailbox,
+                               remoteHost: remoteHost)
     return try await withThrowingTaskGroup(of: Result.self) { group in
         group.addTask {
             defer {

@@ -150,6 +150,14 @@ Re-check `swift-nio-quic` at each milestone boundary.
    - Verified against Avahi, which fully resolves our advertisement. IPv4 only for now.
 2. **Known peers:** addresses from identity documents, cached per contact.
 3. **DHT:** Kademlia over the same transport, keyed by user ID. It stores signed identity documents and "where to find me" records, never content. Records are signed and have a TTL.
+   - *As built (M6, `CirclesDHT`):* the only record type is the signed identity document, whose endpoints already say where to find someone. Records verify themselves, a higher version replaces a lower, and they expire after 24 hours unless republished (every 30 minutes by `circles serve`, pods and the GNOME app's node).
+   - Node IDs are hashes of Noise static keys, so a contact's ID is proven by the handshake that reaches it. Nodes record contacts at the address they connected from, never one they claim, and only nodes that say they listen are added to routing tables. Buckets of k=20 keep long-lived contacts over newcomers; lookups ask alpha=3 at a time.
+   - Value lookups collect records from every responder and keep the newest version, so a stale or lying node can't hide an update.
+   - DHT requests share each device's sync port: the first frame's tag (64 and up) tells them apart.
+   - Who listens: pods (at their configured address) and relays run with `--dht-port`, which act as bootstrap nodes. A user's device offers itself only while router port mapping is active, using the mapped port; otherwise it only asks, so unreachable devices don't fill routing tables.
+   - Devices join through configured bootstrap nodes, nodes remembered from last time, their own pods and their contacts' pods. Pods keep their owner's identity document (and the owner's communities') published while the owner is away.
+   - Uses: adding a contact by user ID alone (`circles contact add circles:…`), and in `syncAll`, when every known route to a contact or community fails, looking up a newer document and trying its addresses once.
+   - Not yet: S/Kademlia disjoint lookups and per-peer rate limits (M7); records are kept in memory only, so a restarted node relies on owners republishing.
 4. **Pods and relays:** listed in the identity document as stable rendezvous points.
 
 ### 7.3 NAT traversal
@@ -202,6 +210,15 @@ Re-check `swift-nio-quic` at each milestone boundary.
 ### 7.6 Mobile push
 
 iOS and Android kill background sockets. An optional **push relay** (self-hostable) receives a minimal, content-free "you have something" ping from a pod and forwards it through APNs or FCM. The device then wakes and syncs directly. The push relay only learns that a ping happened, never what it was about.
+
+#### As implemented in M6 (`CirclesPush`, `circles-push`)
+
+- **Registration:** a device registers its platform token over Noise (the relay's key pinned, as with relays) and gets an opaque 16-byte **handle** bound to its device key. Re-registering with a new token keeps the handle; only the registering device can remove it. Registrations persist on the relay (0600).
+- **Handles go to pods only:** each of the owner's devices sends its own handles in the signed pod configuration (`PodConfig.push`), and the pod keeps them per signing device, so one device's sync never drops another's registration.
+- **Pings:** after a sync brings entries from anyone other than the owner (contacts, community members), the pod pings its owner's handles, grouped per relay, at most every 30 seconds. The relay coalesces per handle too, caps handles per ping, and answers pings the same way whether or not a handle exists, so they can't probe for registrations.
+- **Delivery:** content-free. APNs background pushes (`apns-push-type: background`, priority 5) with token auth (an ES256 JWT, reused for 50 minutes); FCM HTTP v1 high-priority data messages (`{"circles": "sync"}`) with an OAuth token from an RS256 service-account assertion. A `test` platform prints wake-ups instead, for running without credentials.
+- **What the relay learns:** device push tokens (unavoidable), which pod IPs ping which handles, and when. Not who the pods belong to (handles are random), and nothing about content.
+- **Not yet verified:** real delivery to Apple and Google. The requests are checked byte for byte in tests (JWTs verified under the matching keys), but no credentials were available. The mobile apps that register don't exist yet; `circles push register` stands in.
 
 ## 8. Audience and Encryption Model
 
@@ -659,7 +676,7 @@ The protocol will get an independent review before any "1.0" label.
 | M4 | The Stream | Comments, +1s, reshares, media blobs; `CirclesPresentation` ~~+ SwiftUI app on macOS/iOS; main-actor spikes for WinUI and GTK~~ (native UIs deferred). **Done (2026-10-08):** SQLite store with migration; encrypted chunked media synced eagerly; comments/+1s through author republishing; reshares of public posts; presentation layer with headless tests; CLI commands. 138 tests pass. Verified live by migrating the M3 demo data and running photo, comment, +1, approval and reshare through a pod. |
 | M4.5 | Native UIs | SwiftUI app (macOS/iOS) and GNOME app over `CirclesPresentation`; main-actor integration spikes for GTK and WinUI. **GNOME done (2026-10-08):** `Apps/Gnome` (libadwaita via direct C interop), main-actor integration solved, self-testing snapshot mode. **Remaining:** SwiftUI on the Mac Studio; WinUI spike on Windows. |
 | M5 | Communities | MLS-backed groups, moderation tools. **Done on branch `communities` (2026-10-08):** `CirclesMLS` over swift-mls 0.1.7 (pinned; MIT, as is its dependency swift-secret-bytes); public and private communities with open, approval and invite-only joining; posting through the sequencer; owner moderation (remove members, posts, comments); one listener serving every identity on a device; pods carrying communities while the owner is offline; CLI, screen models and GNOME pages. 178 tests pass, and the GNOME self-test covers create, request, approval and an incoming post. Verified by hand with two CLI processes over mDNS. **Not yet:** SwiftUI pages; join requests through pods; moderator roles; a second sequencer. |
-| M6 | Platform breadth | Windows (WinUI), Linux (GTK/libadwaita), and Android apps on the shared presentation layer; push relay, DHT |
+| M6 | Platform breadth | Windows (WinUI), Linux (GTK/libadwaita), and Android apps on the shared presentation layer; push relay, DHT. **DHT and push relay done on branch `platform-breadth` (2026-10-08):** `CirclesDHT` (§7.2) with every listener answering DHT requests, pods and relays (`--dht-port`) as nodes, adding contacts by user ID, and a DHT fallback in `syncAll`; `CirclesPush` and `circles-push` (§7.6) with pods waking their owners' phones. 196 tests pass; both checked live with separate processes. Linux's GNOME app was done in M4.5. **Remaining:** WinUI (needs a Windows machine), Android (needs the Swift Android SDK and NDK), real APNs/FCM delivery with credentials. |
 | M7 | Hardening | Threat-model review, fuzzing (wire format, CBOR), simulation at 10k nodes |
 
 ## 15. Open Questions

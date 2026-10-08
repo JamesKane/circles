@@ -83,11 +83,16 @@ public struct SyncEngine: Sendable {
 
     /// Answers an incoming session as whichever identity the initiator asked
     /// for: reads its hello first, then runs the engine `select` returns.
+    /// `first` is the session's first frame, when the caller already read it
+    /// (e.g. to tell sync from DHT requests).
     public static func respond(
         over channel: some MessageChannel,
+        first: [UInt8]? = nil,
         select: @Sendable (UserID?) async throws -> SyncEngine?
     ) async throws -> SyncReport {
-        guard let first = try await channel.receive() else { throw SyncError.connectionClosed }
+        var frame = first
+        if frame == nil { frame = try await channel.receive() }
+        guard let first = frame else { throw SyncError.connectionClosed }
         let message: SyncMessage
         do {
             message = try CBORDecoder().decode(SyncMessage.self, from: first)
