@@ -3,7 +3,6 @@ public import Foundation
 import FoundationNetworking
 #endif
 import Crypto
-import _CryptoExtras
 
 /// Delivers one content-free wake-up to one device.
 public protocol PushSender: Sendable {
@@ -140,18 +139,14 @@ public actor FCMSender: PushSender {
     }
 
     private let account: ServiceAccount
-    private let key: _RSA.Signing.PrivateKey
+    private let key: RSASigner
     private let http: any HTTPPoster
     private let now: @Sendable () -> Date
     private var accessToken: (token: String, expires: Date)?
 
     public init(account: ServiceAccount, http: any HTTPPoster = URLSessionPoster(),
                 now: @escaping @Sendable () -> Date = { Date() }) throws(PushError) {
-        do {
-            key = try _RSA.Signing.PrivateKey(pemRepresentation: account.privateKeyPEM)
-        } catch {
-            throw .invalidCredentials("FCM key: \(error)")
-        }
+        key = try RSASigner(pem: account.privateKeyPEM)
         self.account = account
         self.http = http
         self.now = now
@@ -166,8 +161,7 @@ public actor FCMSender: PushSender {
             claims: ["iss": account.clientEmail, "scope": "https://www.googleapis.com/auth/firebase.messaging",
                      "aud": account.tokenURI, "iat": issued, "exp": issued + 3600]
         )
-        let signature = try key.signature(for: Data(input.utf8), padding: .insecurePKCS1v1_5)
-        let assertion = input + "." + base64URL(signature.rawRepresentation)
+        let assertion = input + "." + base64URL(try key.sign(Data(input.utf8)))
         let form = "grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Ajwt-bearer&assertion=\(assertion)"
         let (status, body) = try await http.post(URL(string: account.tokenURI)!,
                                                  headers: ["content-type": "application/x-www-form-urlencoded"],

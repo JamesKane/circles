@@ -78,7 +78,7 @@ let package = Package(
             name: "CirclesPush",
             dependencies: ["CirclesCore", "CirclesCrypto", "CirclesSync", "CirclesNet", "CirclesStorage",
                            .product(name: "Crypto", package: "swift-crypto"),
-                           .product(name: "_CryptoExtras", package: "swift-crypto")],
+                           .product(name: "_CryptoExtras", package: "swift-crypto", condition: .when(platforms: [.linux, .android]))],
             swiftSettings: swiftSettings
         ),
         .target(
@@ -169,7 +169,7 @@ let package = Package(
         .testTarget(
             name: "CirclesPushTests",
             dependencies: ["CirclesPush", "CirclesNet", .product(name: "Crypto", package: "swift-crypto"),
-                           .product(name: "_CryptoExtras", package: "swift-crypto")],
+                           .product(name: "_CryptoExtras", package: "swift-crypto", condition: .when(platforms: [.linux, .android]))],
             swiftSettings: swiftSettings
         ),
         .testTarget(
