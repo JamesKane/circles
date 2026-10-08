@@ -95,6 +95,12 @@ xcodebuild -project Apps/Apple/Circles.xcodeproj -scheme Circles test
 
 macOS asks for an administrator's approval to enable UI automation; `sudo automationmodetool enable-automationmode-without-authentication` allows it permanently on a development or CI Mac.
 
+To build a signed, notarized disk image to hand out (needs a Developer ID Application certificate; see the top of the script for the one-time notarization setup):
+
+```sh
+NOTARY_PROFILE=circles-notary Apps/Apple/package.sh   # → Apps/Apple/build/Circles-<version>.dmg
+```
+
 The app is sandboxed and keeps its data in its container's Application Support folder. So far it has onboarding, the Stream, posts with comments, +1s and resharing, and the composer; People, Circles and Settings come next.
 
 ## Layout

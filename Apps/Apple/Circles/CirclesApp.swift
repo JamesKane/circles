@@ -14,17 +14,18 @@ struct CirclesApp: App {
                 .frame(minWidth: 720, minHeight: 600)
         }
         .defaultSize(width: 960, height: 900)
+        #if DEBUG
+        // Exercises NetworkLifecycle without sleeping the Mac or changing
+        // networks. (The whole modifier is conditional: an empty commands
+        // block needs macOS 27.)
         .commands {
-            #if DEBUG
-            // Exercises NetworkLifecycle without sleeping the Mac or
-            // changing networks.
             CommandMenu("Debug") {
                 Button("Simulate Sleep") { delegate.app.session?.lifecycle.willSleep() }
                 Button("Simulate Wake") { delegate.app.session?.lifecycle.didWake() }
                 Button("Simulate Network Change") { delegate.app.session?.lifecycle.restartSoon() }
             }
-            #endif
         }
+        #endif
 
         Settings {
             SettingsView(app: delegate.app)
