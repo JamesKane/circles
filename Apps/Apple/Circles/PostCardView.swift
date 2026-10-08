@@ -3,15 +3,17 @@ import SwiftUI
 import CirclesCore
 import CirclesPresentation
 
-/// One post in the Stream. Comments and resharing open from the post page,
-/// so here they are a count and nothing else for now.
+/// A post: in the Stream as a card, and on the post page with its thread.
 struct PostCardView: View {
     let card: PostCard
     let media: MediaLoader
     /// Bumps when a sync brings new content, so attachments that hadn't
     /// synced yet try again.
     let generation: Int
+    var showThread = false
     let onPlusOne: () -> Void
+    var onOpen: () -> Void = {}
+    var onReshare: () -> Void = {}
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -28,6 +30,9 @@ struct PostCardView: View {
                 AttachmentView(preview: preview, media: media, generation: generation)
             }
             actions
+            if showThread {
+                thread
+            }
         }
         .padding(14)
         .background(.background, in: .rect(cornerRadius: 12))
@@ -64,16 +69,63 @@ struct PostCardView: View {
             .help(card.plusOnedByMe ? "Remove your +1" : "+1 this post")
             .accessibilityLabel(card.plusOnedByMe ? "Remove +1, \(card.plusOnes) total" : "+1, \(card.plusOnes) total")
 
-            Label(card.comments.isEmpty ? "Comment" : "\(card.comments.count)", systemImage: "bubble.left")
-                .foregroundStyle(.secondary)
-                .font(.callout)
+            Button(action: onOpen) {
+                Label(card.comments.isEmpty ? "Comment" : "\(card.comments.count)", systemImage: "bubble.left")
+            }
+            .buttonStyle(.borderless)
+            .foregroundStyle(.secondary)
+            .help(card.comments.isEmpty ? "Comment" : "\(card.comments.count) comments")
+            .accessibilityLabel(card.comments.isEmpty ? "Comment" : "\(card.comments.count) comments")
             if card.canReshare {
-                Image(systemName: "arrow.2.squarepath")
+                Button("Reshare publicly", systemImage: "arrow.2.squarepath", action: onReshare)
+                    .labelStyle(.iconOnly)
+                    .buttonStyle(.borderless)
                     .foregroundStyle(.secondary)
-                    .help("Can be reshared publicly")
+                    .help("Reshare publicly")
             }
             Spacer()
         }
+        .font(.callout)
+    }
+
+    private var thread: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            ForEach(card.comments) { comment in
+                CommentView(comment: comment)
+            }
+            if !card.canComment {
+                Text("Comments are turned off.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(.top, card.comments.isEmpty ? 0 : 4)
+    }
+}
+
+struct CommentView: View {
+    let comment: CommentRow
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 8) {
+            AvatarView(name: comment.authorName, initials: Format.initials(comment.authorName), size: 26)
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 4) {
+                    Text(comment.authorName).fontWeight(.semibold)
+                    Text("· \(comment.timestamp)").foregroundStyle(.secondary)
+                }
+                .font(.caption)
+                Text(Style.attributed(comment.body))
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+                if comment.pending {
+                    Label(Strings.pending, systemImage: "clock")
+                        .font(.caption)
+                        .foregroundStyle(Style.color(.pending))
+                }
+            }
+        }
+        .opacity(comment.pending ? 0.8 : 1)
     }
 }
 
@@ -105,12 +157,13 @@ struct ResharedView: View {
 struct AvatarView: View {
     let name: String
     let initials: String
+    var size: CGFloat = 36
 
     var body: some View {
         Text(initials)
-            .font(.system(size: 15, weight: .semibold))
+            .font(.system(size: size * 0.42, weight: .semibold))
             .foregroundStyle(.white)
-            .frame(width: 36, height: 36)
+            .frame(width: size, height: size)
             .background(Style.avatarColor(name), in: .circle)
             .accessibilityHidden(true)
     }

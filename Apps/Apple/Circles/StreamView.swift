@@ -5,17 +5,21 @@ import CirclesPresentation
 struct StreamView: View {
     let session: AppModel.Session
     @State private var showingActivity = false
+    @State private var path: [PostRoute] = []
 
     private var stream: StreamScreenModel { session.stream }
     private var network: NetworkModel { session.network }
 
     var body: some View {
-        NavigationStack {
+        NavigationStack(path: $path) {
             content
                 .navigationTitle("Stream")
                 .toolbar { toolbar }
-                .safeAreaInset(edge: .bottom, spacing: 0) { statusBar }
+                .navigationDestination(for: PostRoute.self) { route in
+                    PostPageView(route: route, session: session)
+                }
         }
+        .safeAreaInset(edge: .bottom, spacing: 0) { statusBar }
         .task { await stream.perform(.refresh) }
         // New content from any sync, incoming or outgoing, refreshes the Stream.
         .onChange(of: network.state.newContentCount) { stream.send(.refresh) }
@@ -43,9 +47,12 @@ struct StreamView: View {
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
                     ForEach(state.cards) { card in
-                        PostCardView(card: card, media: session.media, generation: network.state.newContentCount) {
-                            stream.send(.setPlusOne(card.reference, !card.plusOnedByMe))
-                        }
+                        PostCardView(card: card, media: session.media, generation: network.state.newContentCount,
+                                     onPlusOne: { stream.send(.setPlusOne(card.reference, !card.plusOnedByMe)) },
+                                     onOpen: { path.append(PostRoute(post: card.reference)) },
+                                     onReshare: { path.append(PostRoute(post: card.reference, reshare: true)) })
+                            .contentShape(.rect)
+                            .onTapGesture { path.append(PostRoute(post: card.reference)) }
                     }
                 }
                 .frame(maxWidth: 640)
