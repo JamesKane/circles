@@ -6,6 +6,7 @@ struct StreamView: View {
     let session: AppModel.Session
     @State private var showingActivity = false
     @State private var path: [PostRoute] = []
+    @State private var composing = false
 
     private var stream: StreamScreenModel { session.stream }
     private var network: NetworkModel { session.network }
@@ -20,6 +21,9 @@ struct StreamView: View {
                 }
         }
         .safeAreaInset(edge: .bottom, spacing: 0) { statusBar }
+        .sheet(isPresented: $composing) {
+            ComposerView(session: session) { stream.send(.refresh) }
+        }
         .task { await stream.perform(.refresh) }
         // New content from any sync, incoming or outgoing, refreshes the Stream.
         .onChange(of: network.state.newContentCount) { stream.send(.refresh) }
@@ -75,6 +79,10 @@ struct StreamView: View {
             }
             .pickerStyle(.menu)
             .help("Show posts from one of your circles")
+        }
+        ToolbarItem {
+            Button("New Post", systemImage: "square.and.pencil") { composing = true }
+                .keyboardShortcut("n")
         }
         ToolbarItem {
             if network.state.syncing || stream.state.phase == .syncing {
