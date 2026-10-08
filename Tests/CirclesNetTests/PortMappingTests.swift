@@ -89,7 +89,8 @@ struct PortMappingTests {
     /// Read-only: discovers the router and asks for its external address. It
     /// never creates a mapping. Reported as a known issue where no UPnP
     /// gateway answers (CI, networks without UPnP).
-    @Test("live, read-only: find the UPnP gateway and its external address")
+    @Test("live, read-only: find the UPnP gateway and its external address",
+          .disabled(if: ProcessInfo.processInfo.environment["CI"] != nil, "needs a real router"))
     func liveReadOnly() async throws {
         let group = MultiThreadedEventLoopGroup.singleton
         guard let gateway = try? await UPnP.discover(group: group) else {

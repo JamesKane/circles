@@ -25,6 +25,8 @@ jobs:
     container: ${{ matrix.image }}
     steps:
       - uses: actions/checkout@v4
+      - name: Install SQLite headers
+        run: apt-get update && apt-get install -y --no-install-recommends libsqlite3-dev
       - run: swift --version
       - run: swift build --build-tests
       - run: swift test --skip-build

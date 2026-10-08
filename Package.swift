@@ -53,10 +53,14 @@ let package = Package(
             ],
             swiftSettings: swiftSettings
         ),
-        .systemLibrary(
+        // The system SQLite (docs/DESIGN.md §10). On Linux it needs the
+        // development headers: libsqlite3-dev (apt) or sqlite-devel (dnf).
+        .target(
             name: "CSQLite",
-            pkgConfig: "sqlite3",
-            providers: [.apt(["libsqlite3-dev"]), .yum(["sqlite-devel"]), .brew(["sqlite"])]
+            linkerSettings: [
+                .linkedLibrary("sqlite3", .when(platforms: [.linux, .macOS, .iOS, .tvOS, .watchOS, .visionOS, .android])),
+                .linkedLibrary("winsqlite3", .when(platforms: [.windows])),
+            ]
         ),
         .target(
             name: "CirclesStorage",

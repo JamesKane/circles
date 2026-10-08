@@ -1,4 +1,5 @@
 import Testing
+import Foundation
 import CirclesCore
 import CirclesCrypto
 import NIOCore
@@ -69,9 +70,11 @@ struct MulticastDNSTests {
         )])
     }
 
-    /// Uses the real network stack. Reported as a known issue where port
-    /// 5353 can't be bound or multicast isn't available (some CI sandboxes).
-    @Test("advertise and browse find each other on this machine")
+    /// Uses the real network stack, so it's skipped on CI runners (GitHub sets
+    /// `CI`), whose networking doesn't reliably loop multicast back. Locally,
+    /// it's reported as a known issue where port 5353 can't be bound.
+    @Test("advertise and browse find each other on this machine",
+          .disabled(if: ProcessInfo.processInfo.environment["CI"] != nil, "needs real multicast networking"))
     func live() async throws {
         let failure = Mutex<String?>(nil)
         let advertiser = Task {
