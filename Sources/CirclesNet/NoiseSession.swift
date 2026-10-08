@@ -69,6 +69,7 @@ public final class NoiseListener: Sendable {
     private let server: NIOAsyncChannel<NIOAsyncChannel<ByteBuffer, ByteBuffer>, Never>
     private let template: NoiseHandshake
     private let handshakeTimeout: Duration
+    private let limiter: ConnectionLimiter
 
     /// The port actually bound (useful when binding port 0).
     public var port: Int { server.channel.localAddress?.port ?? 0 }
@@ -78,10 +79,11 @@ public final class NoiseListener: Sendable {
         port: Int,
         device: borrowing DeviceKeyPair,
         group: any EventLoopGroup = MultiThreadedEventLoopGroup.singleton,
-        handshakeTimeout: Duration = .seconds(10)
+        handshakeTimeout: Duration = .seconds(10),
+        limits: ConnectionLimits = .default
     ) async throws {
         try await self.init(host: host, port: port, handshake: NoiseHandshake(role: .responder, device: device),
-                            group: group, handshakeTimeout: handshakeTimeout)
+                            group: group, handshakeTimeout: handshakeTimeout, limits: limits)
     }
 
     /// `handshake` is a fresh responder handshake, copied for each connection.
@@ -90,11 +92,13 @@ public final class NoiseListener: Sendable {
         port: Int,
         handshake: NoiseHandshake,
         group: any EventLoopGroup = MultiThreadedEventLoopGroup.singleton,
-        handshakeTimeout: Duration = .seconds(10)
+        handshakeTimeout: Duration = .seconds(10),
+        limits: ConnectionLimits = .default
     ) async throws {
         precondition(handshake.role == .responder)
         template = handshake
         self.handshakeTimeout = handshakeTimeout
+        limiter = ConnectionLimiter(limits)
         server = try await ServerBootstrap(group: group)
             .serverChannelOption(.socketOption(.so_reuseaddr), value: 1)
             .childChannelOption(.allowRemoteHalfClosure, value: true)
@@ -103,15 +107,26 @@ public final class NoiseListener: Sendable {
             }
     }
 
-    /// Accepts connections until cancelled. Each session ends when its
-    /// handler returns. Errors in one session never affect others.
+    /// Connections currently open.
+    public var activeConnections: Int { limiter.active }
+
+    /// Accepts connections until cancelled, within the listener's limits.
+    /// Each session ends when its handler returns. Errors in one session
+    /// never affect others.
     public func run(_ handler: @escaping @Sendable (NoiseSession) async throws -> Void) async throws {
         try await server.executeThenClose { connections in
             try await withThrowingDiscardingTaskGroup { group in
                 for try await connection in connections {
-                    let handshake = template, timeout = handshakeTimeout
+                    let ip = connection.channel.remoteAddress?.ipAddress ?? "?"
+                    guard limiter.admit(ip) else {
+                        try? await connection.channel.close()
+                        continue
+                    }
+                    let handshake = template, timeout = handshakeTimeout, limiter = limiter
                     group.addTask {
-                        try? await runSession(connection, handshake: handshake, timeout: timeout, handler)
+                        defer { limiter.release(ip) }
+                        try? await runSession(connection, handshake: handshake, timeout: timeout,
+                                              idleTimeout: limiter.limits.idleTimeout, handler)
                     }
                 }
             }
@@ -136,6 +151,7 @@ func runSession<Result: Sendable>(
     _ channel: NIOAsyncChannel<ByteBuffer, ByteBuffer>,
     handshake: NoiseHandshake,
     timeout: Duration,
+    idleTimeout: Duration = ConnectionLimits.default.idleTimeout,
     _ body: @escaping @Sendable (NoiseSession) async throws -> Result
 ) async throws -> Result {
     try await channel.executeThenClose { inbound, outbound in
@@ -143,7 +159,8 @@ func runSession<Result: Sendable>(
         let transport = try await performHandshake(handshake, frames: &frames, outbound: outbound,
                                                    underlying: channel.channel, timeout: timeout)
         return try await runEstablished(transport, frames: &frames, outbound: outbound,
-                                        underlying: channel.channel, remoteHost: channel.channel.remoteAddress?.ipAddress, body)
+                                        underlying: channel.channel, remoteHost: channel.channel.remoteAddress?.ipAddress,
+                                        idleTimeout: idleTimeout, body)
     }
 }
 
@@ -189,11 +206,25 @@ func runEstablished<Result: Sendable>(
     outbound: FrameWriter,
     underlying: any Channel,
     remoteHost: String? = nil,
+    idleTimeout: Duration = ConnectionLimits.default.idleTimeout,
     _ body: @escaping @Sendable (NoiseSession) async throws -> Result
 ) async throws -> Result {
     let mailbox = Mailbox()
-    let session = NoiseSession(transport: transport, sender: Sender(cipher: transport.send, writer: outbound), mailbox: mailbox,
-                               remoteHost: remoteHost)
+    let activity = Activity()
+    let session = NoiseSession(transport: transport, sender: Sender(cipher: transport.send, writer: outbound, activity: activity),
+                               mailbox: mailbox, remoteHost: remoteHost)
+    // Close a session where nothing moves either way for `idleTimeout`, so
+    // a peer can't hold a connection open by going quiet after the handshake.
+    let watchdog = Task {
+        while !Task.isCancelled {
+            try await Task.sleep(for: idleTimeout / 4)
+            if activity.idle > idleTimeout {
+                try? await underlying.close()
+                return
+            }
+        }
+    }
+    defer { watchdog.cancel() }
     return try await withThrowingTaskGroup(of: Result.self) { group in
         group.addTask {
             defer {
@@ -210,6 +241,7 @@ func runEstablished<Result: Sendable>(
         var reassembler = MessageReassembler()
         do {
             while let frame = try await frames.next() {
+                activity.touch()
                 if let message = try reassembler.add(try cipher.decrypt(Array(buffer: frame))) {
                     await mailbox.put(message)
                 }
@@ -225,10 +257,12 @@ func runEstablished<Result: Sendable>(
 private actor Sender {
     private var cipher: NoiseCipherState
     private let writer: NIOAsyncChannelOutboundWriter<ByteBuffer>
+    private let activity: Activity?
 
-    init(cipher: NoiseCipherState, writer: NIOAsyncChannelOutboundWriter<ByteBuffer>) {
+    init(cipher: NoiseCipherState, writer: NIOAsyncChannelOutboundWriter<ByteBuffer>, activity: Activity? = nil) {
         self.cipher = cipher
         self.writer = writer
+        self.activity = activity
     }
 
     func send(_ message: [UInt8]) async throws {
@@ -238,6 +272,7 @@ private actor Sender {
             frames.append(framed(try cipher.encrypt(Array(chunk))))
         }
         try await writer.write(contentsOf: frames)
+        activity?.touch()
     }
 }
 
