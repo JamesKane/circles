@@ -106,3 +106,21 @@ struct AccountScreenTests {
         #expect(network.state.status == .offline)
     }
 }
+
+@Suite("People: rename and remove")
+@MainActor
+struct PeopleManagementTests {
+    @Test("rename and remove go through the people model")
+    func manage() async throws {
+        let alice = try await Account.create(home: temporaryHome(), displayName: "Alice")
+        let bob = try await Account.create(home: temporaryHome(), displayName: "Bob")
+        try await alice.addContact(invite: await bob.invite())
+        let people = PeopleScreenModel(account: alice, services: RecordingServices())
+        await people.perform(.load)
+        await people.perform(.rename(bob.user, to: "Robert"))
+        #expect(people.state.people.map(\.name) == ["Robert"])
+        await people.perform(.remove(bob.user))
+        #expect(people.state.people.isEmpty)
+        #expect(people.state.notice == "Removed Robert. They can't see anything you post from now on.")
+    }
+}

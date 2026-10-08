@@ -360,6 +360,11 @@ Edits are new objects that supersede earlier ones (`supersedes: CID`). Deletes a
 - **+1s:** the latest reaction per contributor wins, and `retracted` withdraws one.
 - **Reshares:** only of public posts that allow resharing. The reshare embeds the original signed post and its author's identity document (`ContentItem.embedded`), so the resharer's audience can verify it without knowing the original author.
   - *Deviation from Google+:* resharing limited posts isn't supported. It would mean re-encrypting someone else's content to a new audience.
+- **Deleting (added on the `gnome/polish` branch):**
+  - An author withdraws a post, or removes a comment from one of their threads, with a signed `Deletion` (`ContentKind.deletion`, label `circles/v1/deletion`). It's published **to the post's own audience**, so outsiders don't learn the post existed.
+  - Readers honor deletions **only from the post's author**, and hide the post or comment once they sync. A removed comment doesn't come back as "pending" for its writer either.
+  - As §3 says, this is a request: anyone who already had the content may have kept it.
+  - Commenters can't yet delete their own comments, which would need the author to republish the removal.
 - **Limitation:** only the author's contacts can comment, because the author reads contributions from the logs it syncs. Comments from non-contacts on public posts need a delivery path, such as through the author's pod, that accepts strangers with anti-abuse measures (§7.5).
 
 ### 9.5 Ordering
@@ -452,7 +457,7 @@ Rule: no Foundation-only APIs in `CirclesCore`/`CirclesCrypto`/`CirclesSync`. Us
 |---|---|---|---|
 | macOS / iOS / iPadOS / visionOS | ✅ | macOS only | Background limits on iOS → push relay |
 | Linux (x86_64, aarch64) | ✅ (desktop) | ✅ primary | Static Linux SDK for single-binary pods |
-| Windows | ✅ | ✅ | Builds in CI (SQLite via the built-in `winsqlite3`); 137/138 tests pass. **Open:** relayed sessions end early on Windows (the relay end-to-end test is disabled there until debugged on a Windows machine). DPAPI secret store not done. |
+| Windows | ✅ | ✅ | Builds in CI (SQLite via the built-in `winsqlite3`); 137/138 tests pass. **Open:** relayed sessions end early on Windows (the relay end-to-end test is disabled there until debugged on a Windows machine). Plain TCP syncs also occasionally hit a handshake timeout on the Windows runner (seen once in the comments test, 2026-10-08, and it passed on rerun). Probably the same networking issue. DPAPI secret store not done. |
 | Android | ✅ | — | Swift SDK for Android; Kotlin/Compose UI |
 | WebAssembly | Read-only/light client | — | No raw sockets; WebSocket/WebTransport to a pod |
 
@@ -561,6 +566,10 @@ Enforcement:
     - `OnboardingScreenModel`, `PeopleScreenModel` (invite exchange) and `SettingsScreenModel` (identity, pods, relays)
   - **New GNOME pages** for each, and quitting stops the network first, so the mDNS goodbye and port-mapping removal go out.
   - **The self-test** (`--snapshot` on an empty home) walks the first-run journey through real widgets: onboarding, adding a contact by pasting their invite, an **incoming sync updating the Stream on its own**, settings, posting, and +1.
+- **Packaging (on `gnome/polish`):**
+  - The desktop entry (`dev.circles.Circles.desktop`, matching the app ID so notifications work), AppStream metadata and app icons are validated with `desktop-file-validate` and `appstreamcli`.
+  - `install.sh` makes a release build with the Swift runtime linked statically, so it needs only GTK 4, libadwaita and SQLite at run time. It was verified by installing into a scratch prefix and running the self-test through the installed launcher.
+  - The Flatpak manifest targets GNOME 51 with the swift6 SDK extension but hasn't been built yet. Flathub will need vendored SwiftPM dependencies.
 - **Wrapper lesson:** GObject `notify::` signals have an extra parameter. `GtkKit.onNotify` handles them, and the plain `connect` refuses them, after a mismatched handler crashed the Settings page.
 
 #### Main-thread integration

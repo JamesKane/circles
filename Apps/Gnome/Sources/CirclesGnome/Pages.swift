@@ -119,7 +119,10 @@ final class StreamPage {
                 let created = PostView(media: media, showThread: false,
                                        onPlusOne: { [model] card in model.send(.setPlusOne(card.reference, !card.plusOnedByMe)) },
                                        onOpen: { [unowned app] card in app.open(card.reference) },
-                                       onReshare: { [unowned app] card in app.open(card.reference) })
+                                       onReshare: { [unowned app] card in app.open(card.reference) },
+                                       onDelete: { [unowned app, model] card in
+                                           confirmDeletion(on: app.window) { model.send(.delete(card.reference)) }
+                                       })
                 rows[card.id] = created
                 gtk_box_append(g(list), created.root)
                 return created
@@ -143,13 +146,21 @@ final class PostPage {
     private let entry = UI.entry(placeholder: "Add a comment…")
     private var send: Widget!
     private var alive = true
+    private unowned let app: AppController
 
-    init(model: PostScreenModel, media: MediaLoader) {
+    init(model: PostScreenModel, media: MediaLoader, app: AppController) {
         self.model = model
         view = PostView(media: media, showThread: true,
                         onPlusOne: { _ in model.send(.togglePlusOne) },
                         onOpen: { _ in },
-                        onReshare: { _ in model.send(.reshare(comment: "")) })
+                        onReshare: { _ in model.send(.reshare(comment: "")) },
+                        onDelete: { [unowned app] _ in confirmDeletion(on: app.window) { model.send(.delete) } },
+                        onRemoveComment: { [unowned app] comment in
+                            confirm(on: app.window, heading: "Remove \(comment.authorName)'s comment?",
+                                    body: "It disappears from your thread for everyone once they sync.",
+                                    action: "Remove", destructive: true) { model.send(.removeComment(comment.id)) }
+                        })
+        self.app = app
         UI.expand(entry)
         let content = UI.vbox(spacing: 12, [status, view.root])
         send = UI.button("Comment", classes: ["suggested-action"]) { model.send(.submitComment) }
@@ -169,6 +180,11 @@ final class PostPage {
 
     private func render() {
         let state = model.state
+        if state.deleted {
+            alive = false
+            app.back()
+            return
+        }
         if let card = state.card { view.update(card) }
         UI.setVisible(view.root, state.card != nil)
         UI.setText(status, phaseText(state.phase) ?? "")
@@ -245,3 +261,11 @@ final class CirclesPage {
 }
 
 import Foundation
+
+/// Confirms deleting a post, explaining what deletion can and can't do.
+@MainActor
+func confirmDeletion(on window: Widget, _ onConfirm: @escaping @MainActor () -> Void) {
+    confirm(on: window, heading: "Delete this post?",
+            body: "It disappears for everyone once they sync. People who already saw it may have kept a copy.",
+            action: "Delete", destructive: true, onConfirm)
+}

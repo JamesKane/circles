@@ -7,6 +7,8 @@ public struct PostState: Sendable, Equatable {
     public var card: PostCard?
     public var draft = ""
     public var phase: Phase = .idle
+    /// We deleted this post; the UI should leave the screen.
+    public var deleted = false
 
     public var canSubmitComment: Bool {
         card?.canComment == true && !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -20,6 +22,10 @@ public enum PostIntent: Sendable {
     case togglePlusOne
     /// Reshares to everyone, with an optional comment.
     case reshare(comment: String)
+    /// Deletes the post (ours only).
+    case delete
+    /// Removes a comment from our post's thread.
+    case removeComment(ContentID)
 }
 
 /// One post with its thread.
@@ -57,13 +63,23 @@ public final class PostScreenModel: ScreenModel {
         case .reshare(let comment):
             guard state.card?.canReshare == true else { return }
             await attempt { try await self.account.reshare(self.post, comment: RichText(plain: comment), to: .everyone) }
+        case .delete:
+            guard state.card?.canDelete == true else { return }
+            if await attempt({ try await self.account.delete(post: self.post.id) }) {
+                state.deleted = true
+                state.card = nil
+            }
+        case .removeComment(let comment):
+            guard state.card?.canDelete == true else { return }
+            await attempt { try await self.account.removeComment(comment, from: self.post.id) }
+            await reload()
         }
     }
 
     private func reload() async {
         do {
             let item = try await account.stream().first { $0.id == post.id && $0.author == post.author }
-            state.card = item.map { PostCard($0, now: now()) }
+            state.card = item.map { PostCard($0, now: now(), me: account.user) }
             state.phase = item == nil ? .failed("This post isn't available.") : .idle
         } catch {
             state.phase = .failed(String(describing: error))

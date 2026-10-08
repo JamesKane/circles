@@ -70,6 +70,30 @@ extension Account {
         }
     }
 
+    // MARK: Deleting
+
+    /// Withdraws one of our posts. Published to the post's own audience, so
+    /// nobody outside it learns the post existed. Readers who already have it
+    /// hide it once they sync; they can't be forced to forget it.
+    public func delete(post id: ContentID) async throws {
+        try reload()
+        guard let target = try await ownPostIndex()[id] else { throw AccountError.notYours }
+        try await publishDeletion(of: id, to: target)
+    }
+
+    /// Removes a comment from the thread of one of our posts (moderation).
+    public func removeComment(_ comment: ContentID, from post: ContentID) async throws {
+        try reload()
+        guard let target = try await ownPostIndex()[post] else { throw AccountError.notYours }
+        try await publishDeletion(of: comment, to: target)
+    }
+
+    private func publishDeletion(of id: ContentID, to post: OwnPost) async throws {
+        let deletion = Deletion(author: user, target: id, created: try tick())
+        let item = ContentItem(kind: .deletion, object: try SignedObject(encoding: deletion, label: .deletion, with: device))
+        try await publish(item, to: post.audienceKeys)
+    }
+
     // MARK: Media
 
     /// An attachment's bytes, or nil if its chunks haven't arrived yet.
@@ -224,6 +248,9 @@ extension Account {
         var items: [StreamItem] = []
         var threads: [ContentID: [VerifiedContribution]] = [:]
         var mine: [VerifiedContribution] = []
+        // Deletions count only from the post's author: their posts, and the
+        // comments in their threads.
+        var deleted: [UserID: Set<ContentID>] = [:]
 
         for author in [user] + contacts.map(\.user) {
             guard let identity = try await verifiedIdentity(for: author) else { continue }
@@ -245,14 +272,23 @@ extension Account {
                     if author == user, let contribution = verifiedContribution(item, contributorIdentity: identityDocument, pending: true) {
                         mine.append(contribution)
                     }
+                case .deletion:
+                    if let claimed = try? CBORDecoder().decode(Deletion.self, from: item.object.payload), claimed.author == author,
+                       (try? identity.verify(item.object, label: .deletion, atMillis: claimed.created.millis)) != nil {
+                        deleted[author, default: []].insert(claimed.target)
+                    }
                 }
             }
         }
 
+        items.removeAll { deleted[$0.author]?.contains($0.id) == true }
         for index in items.indices {
-            var thread = threads[items[index].id] ?? []
+            let removed = deleted[items[index].author] ?? []
+            var thread = (threads[items[index].id] ?? []).filter { !removed.contains($0.id) }
             let republished = Set(thread.map(\.id))
-            thread += mine.filter { $0.post == items[index].id && !republished.contains($0.id) }
+            // Our own not-yet-republished contributions show as pending, unless
+            // the author has removed them.
+            thread += mine.filter { $0.post == items[index].id && !republished.contains($0.id) && !removed.contains($0.id) }
             apply(thread, to: &items[index])
         }
         return items.sorted { $0.created > $1.created }

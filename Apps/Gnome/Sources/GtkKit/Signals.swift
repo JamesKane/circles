@@ -40,6 +40,10 @@ extension OpaquePointer: GPointerConvertible {
     public var gpointer: UnsafeMutableRawPointer { UnsafeMutableRawPointer(self) }
 }
 
+extension UnsafeMutableRawPointer: GPointerConvertible {
+    public var gpointer: UnsafeMutableRawPointer { self }
+}
+
 /// Casts between GObject pointer types, standing in for C macros such as
 /// `GTK_WIDGET(x)` that Swift can't import. Only for pointers that really are
 /// instances of the target type (or a subclass).

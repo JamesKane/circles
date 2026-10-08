@@ -166,3 +166,62 @@ struct ScreenModelTests {
         #expect(navigation.current == .stream)
     }
 }
+
+@Suite("Deleting through screen models")
+@MainActor
+struct DeletingScreenTests {
+    @Test("only the author can delete, and removing a comment updates the thread")
+    func deleting() async throws {
+        let (alice, bob) = try await friends()
+        let id = try await alice.post(RichText(plain: "draft thought"), to: .everyone)
+        try await sync(bob, with: alice)
+        let bobsView = PostScreenModel(post: ObjectRef(author: alice.user, id: id), account: bob)
+        await bobsView.perform(.load)
+        #expect(bobsView.state.card?.canDelete == false)
+        await bobsView.perform(.editDraft("hmm"))
+        await bobsView.perform(.submitComment)
+        try await sync(alice, with: bob)
+
+        let alicesView = PostScreenModel(post: ObjectRef(author: alice.user, id: id), account: alice)
+        await alicesView.perform(.load)
+        let comment = try #require(alicesView.state.card?.comments.first)
+        #expect(alicesView.state.card?.canDelete == true && comment.canRemove)
+        await alicesView.perform(.removeComment(comment.id))
+        #expect(alicesView.state.card?.comments.isEmpty == true)
+
+        await alicesView.perform(.delete)
+        #expect(alicesView.state.deleted && alicesView.state.card == nil)
+        let stream = StreamScreenModel(account: alice)
+        await stream.perform(.refresh)
+        #expect(stream.state.cards.isEmpty)
+    }
+}
+
+@Suite("Arrivals for notifications")
+@MainActor
+struct ArrivalTests {
+    @Test("new posts from others and comments on our posts become arrivals; our own activity and the first load don't")
+    func arrivals() async throws {
+        let (alice, bob) = try await friends()
+        let id = try await alice.post(RichText(plain: "Dinner Friday?"), to: .everyone)
+        let stream = StreamScreenModel(account: alice)
+        await stream.perform(.refresh)
+        #expect(stream.state.arrivals.isEmpty && stream.state.arrivalGeneration == 0) // first load
+
+        try await alice.post(RichText(plain: "my own news"), to: .everyone)
+        await stream.perform(.refresh)
+        #expect(stream.state.arrivals.isEmpty) // our own post isn't news
+
+        try await sync(bob, with: alice)
+        try await bob.post(RichText(plain: String(repeating: "long ", count: 40)), to: .everyone)
+        try await bob.comment(RichText(plain: "I'm in"), on: ObjectRef(author: alice.user, id: id))
+        try await sync(alice, with: bob)
+        await stream.perform(.refresh)
+        #expect(stream.state.arrivalGeneration == 1)
+        #expect(stream.state.arrivals.map(\.title).sorted() == ["Bob posted", "Bob commented on your post"].sorted())
+        #expect(stream.state.arrivals.first { $0.kind == .post }?.body.count == 120)
+
+        await stream.perform(.refresh)
+        #expect(stream.state.arrivals.isEmpty && stream.state.arrivalGeneration == 1) // nothing new
+    }
+}
