@@ -95,7 +95,7 @@ final class PeoplePage {
     let model: PeopleScreenModel
     let widget: Widget
     private let invite = UI.label("", classes: ["caption", "monospace", "dim-label"], wrap: true)
-    private let entry = UI.entry(placeholder: "Paste someone's invite (circles-invite:…)")
+    private let entry = UI.entry(placeholder: "Paste someone's invite or user ID (circles:…)")
     private var add: Widget!
     private let notice = UI.label("", classes: ["success"], wrap: true)
     private let error = UI.label("", classes: ["error"], wrap: true)

@@ -112,7 +112,7 @@ let package = Package(
         ),
         .target(
             name: "CirclesPresentation",
-            dependencies: ["CirclesKit"],
+            dependencies: ["CirclesKit", "CirclesDHT"],
             swiftSettings: swiftSettings
         ),
         .target(
@@ -168,7 +168,7 @@ let package = Package(
         ),
         .testTarget(
             name: "CirclesPresentationTests",
-            dependencies: ["CirclesPresentation", "CirclesNet"],
+            dependencies: ["CirclesPresentation", "CirclesNet", "CirclesDHT"],
             swiftSettings: swiftSettings
         ),
         .testTarget(

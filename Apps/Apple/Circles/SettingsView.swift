@@ -82,6 +82,7 @@ private struct NetworkSettings: View {
             } footer: {
                 Text(network.state.summary())
             }
+            DHTSettings(network: network, useDHT: preference(\.useDHT))
             Section("Activity") {
                 ActivityList(network: network)
                     .frame(minHeight: 120)
@@ -99,6 +100,50 @@ private struct NetworkSettings: View {
                     if keyPath == \.mapRouterPort, !on { preferences.publishPublicAddress = false }
                     network.send(.setPreferences(preferences))
                 })
+    }
+}
+
+/// Taking part in the DHT, and extra nodes to join it through.
+private struct DHTSettings: View {
+    let network: NetworkModel
+    let useDHT: Binding<Bool>
+    @State private var draft = ""
+
+    var body: some View {
+        let state = network.state
+        Section {
+            Toggle(isOn: useDHT) {
+                Text("Use the DHT")
+                Text("Publishes your identity so people can add you by user ID, and finds contacts whose addresses changed.")
+            }
+            ForEach(state.bootstrapNodes) { node in
+                HStack {
+                    Text(node.address).font(.callout.monospaced())
+                    Spacer()
+                    Button("Remove", systemImage: "minus.circle") { network.send(.removeBootstrapNode(node)) }
+                        .labelStyle(.iconOnly)
+                        .buttonStyle(.borderless)
+                }
+            }
+            HStack {
+                TextField("Bootstrap node", text: $draft, prompt: Text("circles-dht-node:…"))
+                    .labelsHidden()
+                    .textFieldStyle(.roundedBorder)
+                    .onSubmit { network.send(.addBootstrapNode) }
+                Button("Add Node") { network.send(.addBootstrapNode) }
+                    .disabled(draft.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
+            if let error = state.bootstrapError {
+                Label(error, systemImage: "exclamationmark.triangle")
+                    .foregroundStyle(.red)
+            }
+        } header: {
+            Text("DHT")
+        } footer: {
+            Text("This Mac joins through your pods and your contacts' pods. With neither, add a bootstrap node: circles-relay --dht-port and circles-pod serve print one.")
+        }
+        .onChange(of: draft) { network.send(.editBootstrapNode(draft)) }
+        .onChange(of: network.state.bootstrapDraft) { if network.state.bootstrapDraft != draft { draft = network.state.bootstrapDraft } }
     }
 }
 

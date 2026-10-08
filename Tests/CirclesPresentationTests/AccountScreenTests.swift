@@ -2,7 +2,9 @@ import Testing
 import Foundation
 import Synchronization
 import CirclesCore
+import CirclesCrypto
 import CirclesKit
+import CirclesDHT
 @testable import CirclesPresentation
 
 /// Records what screen models put on the clipboard.
@@ -122,5 +124,61 @@ struct PeopleManagementTests {
         await people.perform(.remove(bob.user))
         #expect(people.state.people.isEmpty)
         #expect(people.state.notice == "Removed Robert. They can't see anything you post from now on.")
+    }
+}
+
+@Suite("The DHT through screen models")
+@MainActor
+struct DHTScreenTests {
+    @Test("people are added by user ID when the DHT has them")
+    func addByUserID() async throws {
+        let alice = try await Account.create(home: temporaryHome(), displayName: "Alice")
+        let bob = try await Account.create(home: temporaryHome(), displayName: "Bob")
+        let server = try await DHTServer(identity: try RelayIdentity(home: temporaryHome()), host: "127.0.0.1", port: 0)
+        let task = Task { try await server.run(seeds: []) }
+        defer { task.cancel() }
+        let node = try DHTNodeText.text(for: DHTContact(key: server.node.key, host: "127.0.0.1", port: UInt16(server.port)))
+        for account in [alice, bob] {
+            let network = NetworkModel(account: account)
+            await network.perform(.editBootstrapNode(node))
+            await network.perform(.addBootstrapNode)
+        }
+        await alice.maintainDHT()
+
+        let people = PeopleScreenModel(account: bob, services: RecordingServices())
+        await people.perform(.load)
+        await people.perform(.editInvite(" \(alice.user.description) "))
+        #expect(people.state.canAdd)
+        await people.perform(.addContact)
+        #expect(people.state.people.map(\.name) == ["Alice"])
+        #expect(people.state.inviteDraft.isEmpty && people.state.notice?.contains("Found Alice in the DHT") == true)
+
+        await people.perform(.editInvite(IdentityKeyPair().userID.description))
+        await people.perform(.addContact)
+        #expect(people.state.phase == .failed("Couldn't find them in the DHT. Ask them for an invite instead."))
+    }
+
+    @Test("bootstrap nodes are validated, deduplicated, saved and removed")
+    func bootstrapNodes() async throws {
+        let alice = try await Account.create(home: temporaryHome(), displayName: "Alice")
+        let network = NetworkModel(account: alice)
+        await network.perform(.editBootstrapNode("not a node"))
+        await network.perform(.addBootstrapNode)
+        #expect(network.state.bootstrapError != nil && network.state.bootstrapNodes.isEmpty)
+
+        let key = try RelayIdentity(home: temporaryHome()).agreementKey
+        for host in ["old.example.net", "dht.example.net"] {
+            await network.perform(.editBootstrapNode(try DHTNodeText.text(for: DHTContact(key: key, host: host, port: 7467))))
+            #expect(network.state.bootstrapError == nil)
+            await network.perform(.addBootstrapNode)
+        }
+        // The same node at a new address replaces the old one.
+        #expect(network.state.bootstrapNodes.map(\.address) == ["dht.example.net:7467"])
+        #expect(network.state.bootstrapDraft.isEmpty)
+        #expect(try await alice.preferences().dhtBootstrap.count == 1)
+
+        await network.perform(.removeBootstrapNode(network.state.bootstrapNodes[0]))
+        #expect(network.state.bootstrapNodes.isEmpty)
+        #expect(try await alice.preferences().dhtBootstrap.isEmpty)
     }
 }

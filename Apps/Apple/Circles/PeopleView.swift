@@ -2,7 +2,7 @@ import SwiftUI
 import CirclesCore
 import CirclesPresentation
 
-/// Adding people by exchanging invites, and managing contacts.
+/// Adding people by exchanging invites or by user ID, and managing contacts.
 struct PeopleView: View {
     let model: PeopleScreenModel
     @State private var inviteDraft = ""
@@ -24,12 +24,12 @@ struct PeopleView: View {
             } header: {
                 Text("Your invite")
             } footer: {
-                Text("Send this to someone so they can add you. You both need each other's invite before you can sync.")
+                Text("Send this to someone so they can add you. You both need to add each other before you can sync.")
             }
 
-            Section("Add someone") {
+            Section {
                 HStack {
-                    TextField("Paste their invite", text: $inviteDraft, prompt: Text("Paste their invite"))
+                    TextField("Paste their invite or user ID", text: $inviteDraft, prompt: Text("Paste their invite or user ID"))
                         .labelsHidden()
                         .textFieldStyle(.roundedBorder)
                         .onSubmit { model.send(.addContact) }
@@ -37,6 +37,12 @@ struct PeopleView: View {
                     Button("Add") { model.send(.addContact) }
                         .accessibilityIdentifier("add-contact")
                         .disabled(!state.canAdd)
+                }
+                if state.phase == .loading {
+                    HStack(spacing: 6) {
+                        ProgressView().controlSize(.small)
+                        Text("Looking them up in the DHT…").foregroundStyle(.secondary)
+                    }
                 }
                 if let notice = state.notice {
                     Label(notice, systemImage: "checkmark.circle")
@@ -46,6 +52,10 @@ struct PeopleView: View {
                     Label(reason, systemImage: "exclamationmark.triangle")
                         .foregroundStyle(.red)
                 }
+            } header: {
+                Text("Add someone")
+            } footer: {
+                Text("A user ID (circles:…) works when they're findable in the DHT. You'll find yours in Settings → Account.")
             }
 
             Section("People") {
