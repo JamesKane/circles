@@ -190,6 +190,19 @@ Public posts skip encryption and are signed only.
 
 Leaving a circle: the next post uses a new epoch the removed member doesn't have. They keep posts they already received. This matches Google+ semantics, where removing someone hid future posts but couldn't erase what they had seen.
 
+#### Construction (implemented in M1, `CirclesCrypto`)
+
+- **Signatures** are Ed25519 over `label || 0x00 || payload`, where the label names the purpose (`circles/v1/post`, `…/comment`, `…/device-certificate`, `…/key-grant`, …). A signature made for one purpose can never be accepted for another. The label is supplied by the verifier and isn't transmitted. A `SignedObject` carries the exact payload bytes, and verification never re-encodes them (§7.4).
+- **Sign, then encrypt.** The envelope plaintext is an encoded `SignedObject`, so which of the author's devices signed it is visible only to the audience.
+- **Envelope body:** ChaCha20-Poly1305 under a fresh 256-bit content key, with associated data binding the format version and author. The plaintext is padded with **Padmé** first (it leaks only O(log log n) bits of length, with at most ~12% overhead). This implements the size-bucket mitigation from §8.4.
+- **Circle wraps:** the content key is sealed with ChaCha20-Poly1305 under each circle-epoch key. Each epoch key has an opaque random 16-byte `AudienceKeyID`, with no link between epochs. Keyrings index keys by **(owner, key ID)**, so a circle member can't reuse the owner's key to forge envelopes under the owner's name.
+- **Device wraps** (individually named people): HPKE base mode, `DHKEM(X25519, HKDF-SHA256) / HKDF-SHA256 / ChaCha20-Poly1305` (RFC 9180). These carry **no recipient hint**: a device finds its wrap by trial decryption, at one X25519 operation per device wrap. Circle wraps cover the common case, so this stays cheap.
+- Each wrap's associated data includes the body nonce, binding it to its envelope. Wraps are sorted by their random bytes, so their order reveals nothing.
+- **Wraps aren't authenticated as a set.** Someone who can modify an envelope in transit can strip or corrupt other recipients' wraps (denial of access), but can't change what anyone decrypts. The inner signature guarantees that. A property test checks exactly this.
+- **Key grants:** a `KeyGrant` (owner, recipient, key ID, epoch, key) is signed by an `.author` device of the owner, then sealed with HPKE to each of the recipient's devices. On opening, the recipient checks the signature against the owner's verified identity document, and checks that it names them as recipient.
+- **When signatures count:** content is checked at its claimed creation time, so old posts stay valid after a device is revoked. Key grants are checked at **receive** time, so a revoked device can't backdate new grants. Content backdating by a compromised device remains possible until revocation propagates. That's an accepted limitation, bounded by the HLC drift check (§9.5).
+- **Key material:** identity and device private keys are `~Copyable` types, which can't be duplicated by accident. Audience keys use swift-crypto's `SymmetricKey`, which zeroizes its own storage. They're copyable, because keyrings hold many of them.
+- **Deferred:** passphrase backup with Argon2id and social recovery (§6.2), identity-key rotation chains, decoy wraps to hide the recipient count (§8.4), and the platform key store (§10).
 
 ### 8.3 Communities (multi-writer groups)
 
@@ -235,7 +248,7 @@ Mitigations to consider: padding envelopes to size buckets, and hiding the wrapp
 
 ### 9.1 Objects
 
-Every object is immutable, signed, and content-addressed. The CID is a **SHA-256** multihash (`0x12`, 32-byte digest) of the object's canonical encoding, computed with `swift-crypto`, which uses hardware SHA extensions where the CPU has them. The multihash prefix leaves room to move to a different hash later without changing the CID format. Blob chunk CIDs (§9.3) use the same hash.
+Every object is immutable, signed, and content-addressed. The CID is a **SHA-256** multihash (`0x12`, 32-byte digest) of the object's canonical encoding, computed with `swift-crypto`, which uses hardware SHA extensions where the CPU has them. The multihash prefix leaves room to move to a different hash later without changing the CID format. Blob chunk CIDs (§9.3) use the same hash. For a signed object, the CID is the hash of the signed **payload**, not of the signature wrapper, so it doesn't depend on which of the author's devices signed it.
 
 ```swift
 public struct Post: Sendable, Codable, Hashable {
@@ -491,7 +504,7 @@ The protocol will get an independent review before any "1.0" label.
 | # | Milestone | Exit criteria |
 |---|---|---|
 | M0 | Skeleton | SwiftPM package, CI on macOS/Linux/Windows, Core types + deterministic CBOR + tests. **In progress (2026-10-08):** package, `CirclesCore` (CBOR, multiformats, `UserID`, `ContentID`, HLC, model types) and 42 tests are done and passing on Linux. The CI workflow is written but not yet run, because the repo has no remote. |
-| M1 | Identity & crypto | Identity/device keys, certificates, envelopes, circle keys, KeyGrant; property tests. |
+| M1 | Identity & crypto | Identity/device keys, certificates, envelopes, circle keys, KeyGrant; property tests. **Done (2026-10-08):** `CirclesCrypto` module (see §8.2 "Construction"). 76 tests in total pass on Linux, including seeded property tests for tampering, random audiences, signature bit-flips, and CBOR round-trips. |
 | M2 | Two-peer sync over LAN | mDNS discovery, TCP+Noise sessions, per-author logs, CLI can post and read |
 | M3 | Pods & relays | Headless pod daemon, store-and-forward, relayed connections, NAT hole punching |
 | M4 | The Stream | Comments, +1s, reshares, media blobs; `CirclesPresentation` + SwiftUI app on macOS/iOS; main-actor spikes for WinUI and GTK |

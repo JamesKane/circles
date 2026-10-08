@@ -13,6 +13,7 @@ let package = Package(
     platforms: [.macOS(.v15), .iOS(.v18), .tvOS(.v18), .watchOS(.v11), .visionOS(.v2)],
     products: [
         .library(name: "CirclesCore", targets: ["CirclesCore"]),
+        .library(name: "CirclesCrypto", targets: ["CirclesCrypto"]),
     ],
     dependencies: [
         .package(url: "https://github.com/apple/swift-crypto.git", "4.0.0"..<"6.0.0"),
@@ -23,9 +24,19 @@ let package = Package(
             dependencies: [.product(name: "Crypto", package: "swift-crypto")],
             swiftSettings: swiftSettings
         ),
+        .target(
+            name: "CirclesCrypto",
+            dependencies: ["CirclesCore", .product(name: "Crypto", package: "swift-crypto")],
+            swiftSettings: swiftSettings
+        ),
         .testTarget(
             name: "CirclesCoreTests",
             dependencies: ["CirclesCore"],
+            swiftSettings: swiftSettings
+        ),
+        .testTarget(
+            name: "CirclesCryptoTests",
+            dependencies: ["CirclesCrypto"],
             swiftSettings: swiftSettings
         ),
     ]
