@@ -63,6 +63,7 @@ final class StreamPage {
                 UI.button(icon: "document-edit-symbolic", tooltip: "New post") { app.compose() },
                 UI.button(icon: "preferences-system-symbolic", tooltip: "Settings") { app.showSettings() },
                 UI.button(icon: "system-users-symbolic", tooltip: "Circles") { app.showCircles() },
+                UI.button(icon: "circles-community-symbolic", tooltip: "Communities") { app.showCommunities() },
                 UI.button(icon: "contact-new-symbolic", tooltip: "People") { app.showPeople() },
             ]
         )

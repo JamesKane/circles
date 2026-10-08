@@ -18,6 +18,7 @@ let package = Package(
         .library(name: "CirclesNet", targets: ["CirclesNet"]),
         .library(name: "CirclesStorage", targets: ["CirclesStorage"]),
         .library(name: "CirclesKit", targets: ["CirclesKit"]),
+        .library(name: "CirclesMLS", targets: ["CirclesMLS"]),
         .library(name: "CirclesPresentation", targets: ["CirclesPresentation"]),
         .executable(name: "circles", targets: ["circles-cli"]),
         .executable(name: "circles-pod", targets: ["circles-pod"]),
@@ -27,6 +28,9 @@ let package = Package(
         .package(url: "https://github.com/apple/swift-crypto.git", "4.0.0"..<"6.0.0"),
         .package(url: "https://github.com/apple/swift-nio.git", from: "2.100.0"),
         .package(url: "https://github.com/apple/swift-argument-parser.git", from: "1.5.0"),
+        // Pre-release; pinned exactly (docs/DESIGN.md §8.3).
+        .package(url: "https://github.com/germ-network/swift-mls.git", exact: "0.1.7"),
+        .package(url: "https://github.com/germ-network/swift-secret-bytes.git", from: "0.5.0"),
     ],
     targets: [
         .target(
@@ -68,8 +72,22 @@ let package = Package(
             swiftSettings: swiftSettings
         ),
         .target(
+            name: "CirclesMLS",
+            dependencies: [
+                .product(name: "MLSProfileRFC9420", package: "swift-mls"),
+                .product(name: "MLSCrypto", package: "swift-mls"),
+                .product(name: "MLSCodec", package: "swift-mls"),
+                .product(name: "MLSFraming", package: "swift-mls"),
+                .product(name: "MLSTreeMath", package: "swift-mls"),
+                .product(name: "MLSTreeKEM", package: "swift-mls"),
+                .product(name: "SecretBytes", package: "swift-secret-bytes"),
+                .product(name: "Crypto", package: "swift-crypto"),
+            ],
+            swiftSettings: swiftSettings
+        ),
+        .target(
             name: "CirclesKit",
-            dependencies: ["CirclesCore", "CirclesCrypto", "CirclesSync", "CirclesNet", "CirclesStorage"],
+            dependencies: ["CirclesCore", "CirclesCrypto", "CirclesSync", "CirclesNet", "CirclesStorage", "CirclesMLS"],
             swiftSettings: swiftSettings
         ),
         .target(
@@ -125,6 +143,11 @@ let package = Package(
         .testTarget(
             name: "CirclesPresentationTests",
             dependencies: ["CirclesPresentation", "CirclesNet"],
+            swiftSettings: swiftSettings
+        ),
+        .testTarget(
+            name: "CirclesMLSTests",
+            dependencies: ["CirclesMLS"],
             swiftSettings: swiftSettings
         ),
         .testTarget(

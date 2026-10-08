@@ -10,7 +10,7 @@ import CirclesNet
 func servingPod<R>(_ pod: PodNode, port: Int = 0, _ body: (Int) async throws -> R) async throws -> R {
     let listener = try await NoiseListener(host: "127.0.0.1", port: port, handshake: await pod.makeHandshake(role: .responder))
     let task = Task {
-        try await listener.run { session in _ = try await pod.syncEngine().run(over: session) }
+        try await listener.run { session in _ = try await pod.respond(over: session) }
     }
     defer { task.cancel() }
     return try await body(listener.port)

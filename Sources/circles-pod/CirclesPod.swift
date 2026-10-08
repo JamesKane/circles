@@ -71,7 +71,7 @@ struct Serve: AsyncParsableCommand {
             try await withThrowingTaskGroup(of: Void.self) { group in
                 group.addTask {
                     try await listener.run { session in
-                        let report = try await pod.syncEngine().run(over: session)
+                        let report = try await pod.respond(over: session)
                         let peer = report.peer.map { $0 == owner ? "owner" : "contact \(String("\($0)".prefix(20)))…" } ?? "?"
                         say(describe(report, peerName: peer, direction: "incoming"))
                     }

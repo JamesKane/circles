@@ -12,6 +12,33 @@ public struct PodConfig: Sendable, Codable, Equatable {
     public var owner: UserID
     public var version: UInt64
     public var contacts: [UserID]
+    /// Communities the owner sequences, which the pod serves to their
+    /// members (docs/DESIGN.md §8.3). Absent when none (added in M5).
+    public var communities: [PodCommunity]?
+
+    public init(owner: UserID, version: UInt64, contacts: [UserID], communities: [PodCommunity] = []) {
+        self.owner = owner
+        self.version = version
+        self.contacts = contacts
+        self.communities = communities.isEmpty ? nil : communities
+    }
+}
+
+/// One community a pod serves: the community's identity document (which
+/// must certify the pod) and its members, who may sync with it. The roster
+/// of a private community is thereby visible to the owner's pod.
+public struct PodCommunity: Sendable, Codable, Equatable {
+    public var identityDocument: SignedObject
+    public var members: [UserID]
+
+    public init(identityDocument: SignedObject, members: [UserID]) {
+        self.identityDocument = identityDocument
+        self.members = members
+    }
+
+    var community: UserID? {
+        try? CBORDecoder().decode(IdentityDocument.self, from: identityDocument.payload).user
+    }
 }
 
 /// What a new pod shows so its owner can certify it.
@@ -185,11 +212,46 @@ public actor PodNode {
             identityDocument: document,
             policy: SyncPolicy(
                 isAllowed: { peer in peer.user == owner || contacts.contains(peer.user) },
-                interests: { [owner] + ((await self.config)?.contacts ?? []) },
+                // The owner brings its communities' logs and collected
+                // submissions too.
+                interests: {
+                    let config = await self.config
+                    let communities = config?.communities ?? []
+                    return [owner] + (config?.contacts ?? []) + communities.compactMap(\.community) + communities.flatMap(\.members)
+                },
                 handleControl: { control, peer in try await self.accept(control, from: peer) }
             ),
             now: { wallClockMillis() }
         )
+    }
+
+    /// A sync engine that serves one of the owner's communities to its
+    /// members: it hands out the community's log and keeps members' logs,
+    /// where their submissions wait for the owner. Join requests still go
+    /// to the owner.
+    public func communityEngine(_ community: UserID) async throws -> SyncEngine {
+        guard let entry = config?.communities?.first(where: { $0.community == community }),
+              let document = try await store.identityDocument(for: community)
+        else { throw PodError.notServing }
+        let members = entry.members
+        return SyncEngine(
+            store: store,
+            identityDocument: document,
+            policy: SyncPolicy(
+                isAllowed: { peer in members.contains(peer.user) },
+                interests: { [community] + members }
+            ),
+            now: { wallClockMillis() }
+        )
+    }
+
+    /// Answers an incoming session as the owner or as one of its
+    /// communities, whichever the peer asked for.
+    public func respond(over channel: some MessageChannel) async throws -> SyncReport {
+        try await SyncEngine.respond(over: channel) { target in
+            guard let target, target != (await self.owner) else { return try await self.syncEngine() }
+            return try await self.communityEngine(target)
+        }
     }
 
     private func accept(_ control: SignedObject, from peer: PeerInfo) async throws {
@@ -198,9 +260,21 @@ public actor PodNode {
               control.signer == device.device.publicKey
         else { throw PodError.notFromOwner }
         let payload = try peer.identity.verify(control, label: .podConfig, atMillis: wallClockMillis())
-        let config = try CBORDecoder().decode(PodConfig.self, from: payload)
+        var config = try CBORDecoder().decode(PodConfig.self, from: payload)
         guard config.owner == owner else { throw PodError.notFromOwner }
         if let current = self.config, current.version >= config.version { return }
+        var served: [PodCommunity] = []
+        for community in config.communities ?? [] {
+            // Serve only communities whose documents certify this pod.
+            guard let user = community.community,
+                  let verified = try? VerifiedIdentity(verifying: community.identityDocument, for: user),
+                  verified.certificates[deviceID]?.capabilities.contains(DeviceCapabilities.storeAndForward) == true,
+                  verified.certificates[deviceID]?.agreementKey == agreementKey
+            else { continue }
+            try await store.saveIdentityDocument(community.identityDocument, verified: verified)
+            served.append(community)
+        }
+        config.communities = served.isEmpty ? nil : served
         self.config = config
         try saveState()
     }
@@ -210,4 +284,5 @@ public enum PodError: Error, Sendable, Equatable {
     case notCertified
     case notPaired
     case notFromOwner
+    case notServing
 }

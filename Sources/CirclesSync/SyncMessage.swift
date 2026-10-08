@@ -31,6 +31,17 @@ public enum SyncMessage: Sendable, Hashable {
         public var version: UInt64
         /// The sender's signed identity document.
         public var identity: SignedObject
+        /// From an initiator: the identity it wants to reach, when the
+        /// responder's device serves more than one (its user's, and
+        /// communities it sequences). Absent means the device's own user
+        /// (added in M5).
+        public var target: UserID?
+
+        public init(version: UInt64, identity: SignedObject, target: UserID? = nil) {
+            self.version = version
+            self.identity = identity
+            self.target = target
+        }
     }
 
     /// "I have this much of `author`'s logs; send me what's newer."

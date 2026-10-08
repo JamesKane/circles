@@ -43,6 +43,17 @@ public struct PostCard: Sendable, Equatable, Identifiable {
         // Only public posts can be reshared (docs/DESIGN.md §9.4).
         canReshare = item.resharesEnabled && item.audience == .everyone
     }
+
+    /// A community post. The community's owner moderates: it can remove any
+    /// post or comment. Community posts aren't reshared.
+    init(communityItem item: StreamItem, now: Date, moderator: Bool, communityName: String) {
+        self.init(item, now: now, me: item.author)
+        audienceLabel = communityName
+        comments = item.comments.map { CommentRow($0, now: now, removable: moderator) }
+        canDelete = moderator
+        canReshare = false
+        canComment = true
+    }
 }
 
 public struct CommentRow: Sendable, Equatable, Identifiable {

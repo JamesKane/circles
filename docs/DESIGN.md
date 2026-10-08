@@ -267,6 +267,41 @@ Communities need many writers, moderators, and membership changes made by people
 3. **Own persistence.** Serialize group state into `CirclesStorage` ourselves, with crash-safe epoch transitions: never lose an epoch secret between committing and storing it.
 4. **Track audit status** for both libraries. A community feature labelled "secure" needs an audited (or at least independently reviewed) MLS stack before 1.0.
 
+#### Community design for M5 (decided 2026-10-08)
+
+**A community is an identity of its own.**
+- It has its own Ed25519 key, the "community key", held by the owner's device.
+- Its identity document certifies the community's *serving devices*: the owner's device as `.author`, and optionally pods as `.storeAndForward`. Its endpoints list pods and relays as usual.
+- So sync, verification, pods, relays and mDNS all work for communities unchanged: following a community is following its identity.
+- A device that serves a community presents the community's identity document, the way pods present their owner's. *As built:* rather than a second listener, the initiator's sync `hello` names a `target` identity (absent means the device's own user), and the responder reads that hello first and answers as the account or as a community it serves. One port, one mDNS advertisement and one relay reservation cover every identity on the device. Older peers never send a target, so they're unaffected.
+- The community's document lists the owner's pods, the sequencer's direct address and the owner's relays, and certifies the owner's pods. The owner re-signs it whenever its own endpoints or pods change.
+
+**One sequencer, one order.**
+- MLS needs one agreed sequence of commits. The community's log is written by a single **sequencer device** (the owner's), and that device's hash-linked log *is* the order. Commits, Welcomes and posts take effect in log order.
+- Only the sequencer commits. Members never commit; they ask the sequencer, which also handles leaving.
+- Members process the community log strictly in order, keep their MLS state (sealed snapshots, §8.3 pre-M5 task 3), and store each post **decrypted when processed**. Old epochs' keys are deliberately discarded, so later decryption isn't possible.
+- Pods certified for the community store and serve its log (ciphertext for private communities), so the community stays readable while the owner is offline. New posts and members wait for the sequencer.
+  - *As built:* the owner's signed pod configuration lists each community's identity document and roster. The pod serves the community only to the listed members, and keeps their logs so their submissions reach the owner on its next sync with the pod. The pod learns a private community's roster, a trade-off accepted because the pod is the owner's own device.
+  - Join requests aren't taken by pods: pending members must reach the owner (directly, on the local network or through a relay).
+- *Limitations:* a single sequencer is a single point of control and availability; no moderator roles beyond the owner yet; no post-compromise updates initiated by members.
+
+**Membership and joining.**
+- The MLS credential is the member's `UserID`. A join request carries an MLS KeyPackage **signed by one of the user's certified devices**. The sequencer checks it against the user's identity document before adding them, so other members can trust the roster: the sequencer is the authority.
+- Policies, all in M5:
+  - **open:** requests are accepted automatically
+  - **approval:** the owner approves or rejects
+  - **invite-only:** a request must carry an invite token signed by the community key
+- Requests travel as sync control messages to a serving device. Adds and removes are sequencer commits, and each new member's Welcome is published in the community log.
+
+**Posting.**
+- A member's post or comment goes into the member's own log, sealed (HPKE) to the sequencer device. The serving device wants members' logs, so it receives them whenever a member syncs with it.
+- The sequencer verifies the item and republishes it as a `ThreadItem`-like record, signed by the member and carrying their identity document. For a private community, that record is encrypted as an **MLS application message**.
+- Moderation is the same as for threads: only republished items appear, and the owner can remove them with deletions.
+
+**Visibility (decided 2026-10-08):**
+- **Public communities:** the log is signed but not encrypted, so anyone can follow it. There's no MLS group, and posting still requires membership.
+- **Private communities:** content is MLS-encrypted. **New members see posts from when they join onward**: MLS forward secrecy hides earlier epochs, and re-sharing history was left for later. (Google+ showed history to new members.)
+
 ### 8.4 Metadata exposure
 
 What leaks, and to whom:
@@ -623,7 +658,7 @@ The protocol will get an independent review before any "1.0" label.
 | M3 | Pods & relays | Headless pod daemon, store-and-forward, relayed connections, ~~NAT hole punching~~ port mapping (hole punching deferred to QUIC). **Done (2026-10-08):** `circles-pod`, `circles-relay`, endpoints in identity documents, sync control messages, PCP/NAT-PMP/UPnP-IGD mapping. 123 tests pass. Verified live with separate processes (pod store-and-forward, relay-only delivery). UPnP-IGD verified live against a real router: it mapped a port, the router listed it, and it was removed (opt-in test, `CIRCLES_LIVE_PORT_MAPPING=1`). |
 | M4 | The Stream | Comments, +1s, reshares, media blobs; `CirclesPresentation` ~~+ SwiftUI app on macOS/iOS; main-actor spikes for WinUI and GTK~~ (native UIs deferred). **Done (2026-10-08):** SQLite store with migration; encrypted chunked media synced eagerly; comments/+1s through author republishing; reshares of public posts; presentation layer with headless tests; CLI commands. 138 tests pass. Verified live by migrating the M3 demo data and running photo, comment, +1, approval and reshare through a pod. |
 | M4.5 | Native UIs | SwiftUI app (macOS/iOS) and GNOME app over `CirclesPresentation`; main-actor integration spikes for GTK and WinUI. **GNOME done (2026-10-08):** `Apps/Gnome` (libadwaita via direct C interop), main-actor integration solved, self-testing snapshot mode. **Remaining:** SwiftUI on the Mac Studio; WinUI spike on Windows. |
-| M5 | Communities | MLS-backed groups, moderation tools |
+| M5 | Communities | MLS-backed groups, moderation tools. **Done on branch `communities` (2026-10-08):** `CirclesMLS` over swift-mls 0.1.7 (pinned; MIT, as is its dependency swift-secret-bytes); public and private communities with open, approval and invite-only joining; posting through the sequencer; owner moderation (remove members, posts, comments); one listener serving every identity on a device; pods carrying communities while the owner is offline; CLI, screen models and GNOME pages. 178 tests pass, and the GNOME self-test covers create, request, approval and an incoming post. Verified by hand with two CLI processes over mDNS. **Not yet:** SwiftUI pages; join requests through pods; moderator roles; a second sequencer. |
 | M6 | Platform breadth | Windows (WinUI), Linux (GTK/libadwaita), and Android apps on the shared presentation layer; push relay, DHT |
 | M7 | Hardening | Threat-model review, fuzzing (wire format, CBOR), simulation at 10k nodes |
 

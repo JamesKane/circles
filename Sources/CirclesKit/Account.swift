@@ -236,10 +236,13 @@ public actor Account {
 
     // MARK: Logging
 
-    func appendToLog(_ body: LogBody, created: HLCTimestamp? = nil, blobs: [ContentID]? = nil) async throws {
+    /// Appends to this device's log for `author`: ourselves, or a community
+    /// this device sequences (docs/DESIGN.md §8.3).
+    func appendToLog(_ body: LogBody, as author: UserID? = nil, created: HLCTimestamp? = nil, blobs: [ContentID]? = nil) async throws {
+        let author = author ?? user
         let created = try created ?? tick()
-        let head = try await store.head(author: user, device: deviceID)
-        let entry = LogEntry(author: user, device: deviceID, sequence: (head?.sequence ?? 0) + 1,
+        let head = try await store.head(author: author, device: deviceID)
+        let entry = LogEntry(author: author, device: deviceID, sequence: (head?.sequence ?? 0) + 1,
                              previous: head?.id, created: created, body: body, blobs: blobs)
         try await store.append(try VerifiedLogEntry(signing: entry, with: device))
     }
@@ -293,16 +296,34 @@ public actor Account {
     public func syncEngine() -> SyncEngine {
         let me = user
         let contactsURL = files.contacts
+        let communitiesURL = files.communities
         let currentContacts: @Sendable () -> [UserID] = {
             ((try? Files.loadStatic([Contact].self, from: contactsURL)) ?? []).map(\.user)
+        }
+        // Communities we belong to (or asked to join) are synced like contacts:
+        // we talk to their serving devices and want their logs.
+        let currentCommunities: @Sendable () -> [UserID] = {
+            ((try? Files.loadStatic([CommunityState].self, from: communitiesURL)) ?? [])
+                .filter { $0.role == .member || $0.role == .pending }.map(\.community)
+        }
+        // Communities we sequence: our pods keep their logs and members'
+        // submissions, so with our own devices we exchange those too.
+        let ownedLogs: @Sendable () -> [UserID] = {
+            ((try? Files.loadStatic([CommunityState].self, from: communitiesURL)) ?? [])
+                .filter { $0.role == .owner }.flatMap { [$0.community] + $0.roster }
         }
         return SyncEngine(
             store: store,
             identityDocument: identityDocument,
             policy: SyncPolicy(
-                isAllowed: { peer in peer.user == me || currentContacts().contains(peer.user) },
-                interests: { currentContacts() + [me] },
+                isAllowed: { peer in
+                    peer.user == me || currentContacts().contains(peer.user) || currentCommunities().contains(peer.user)
+                },
+                interests: { currentContacts() + currentCommunities() + ownedLogs() + [me] },
                 outgoingControl: { peer in
+                    if currentCommunities().contains(peer.user) {
+                        return (try? await self.joinRequest(for: peer.user)).map { [$0] } ?? []
+                    }
                     guard peer.user == me, peer.device?.capabilities.contains(.storeAndForward) == true,
                           let config = try? await self.signedPodConfig()
                     else { return [] }
@@ -319,9 +340,10 @@ public actor Account {
     }
 
     /// The current contact list for our pods, signed by this device.
-    private func signedPodConfig() throws -> SignedObject {
+    private func signedPodConfig() async throws -> SignedObject {
         try reload()
-        let config = PodConfig(owner: user, version: wallClockMillis(), contacts: contacts.map(\.user))
+        let config = PodConfig(owner: user, version: wallClockMillis(), contacts: contacts.map(\.user),
+                               communities: try await podCommunities())
         return try SignedObject(encoding: config, label: .podConfig, with: device)
     }
 
@@ -342,6 +364,7 @@ public actor Account {
         identityDocument = signed
         try files.save(Profile(displayName: displayName, identityDocument: signed), to: files.profile)
         try await store.saveIdentityDocument(signed, verified: verified)
+        try await refreshCommunityEndpoints()
     }
 
     /// Certifies a pod from its pairing code and lists it in our identity
@@ -388,23 +411,25 @@ public actor Account {
     // MARK: Syncing
 
     /// Connects to a peer and syncs once.
-    public func sync(host: String, port: Int) async throws -> SyncReport {
+    /// `target` names the identity to reach on that device, e.g. a community
+    /// its owner serves.
+    public func sync(host: String, port: Int, target: UserID? = nil) async throws -> SyncReport {
         let engine = syncEngine()
         let report = try await withNoiseConnection(host: host, port: port, handshake: makeHandshake(role: .initiator)) { session in
-            try await engine.run(over: session)
+            try await engine.run(over: session, target: target)
         }
         try await absorbKeyGrants()
         return report
     }
 
     /// Connects to `target` through a relay and syncs once.
-    public func sync(via relay: RelayEndpoint, to target: AgreementPublicKey) async throws -> SyncReport {
+    public func sync(via relay: RelayEndpoint, to target: AgreementPublicKey, identity: UserID? = nil) async throws -> SyncReport {
         let engine = syncEngine()
         let report = try await withRelayedConnection(
             via: RelayAddress(host: relay.host, port: Int(relay.port), key: relay.key), to: target,
             outer: makeHandshake(role: .initiator), inner: makeHandshake(role: .initiator)
         ) { session in
-            try await engine.run(over: session)
+            try await engine.run(over: session, target: identity)
         }
         try await absorbKeyGrants()
         return report
@@ -417,14 +442,12 @@ public actor Account {
         onReserved: @escaping @Sendable () -> Void = {},
         onSync: @escaping @Sendable (SyncReport) async -> Void = { _ in }
     ) async throws {
-        let engine = syncEngine()
         try await CirclesNet.serveViaRelay(
             RelayAddress(host: relay.host, port: Int(relay.port), key: relay.key),
             outer: makeHandshake(role: .initiator), inner: makeHandshake(role: .responder),
             onReserved: onReserved
         ) { session in
-            let report = try await engine.run(over: session)
-            try await self.absorbKeyGrants()
+            let report = try await self.respond(over: session)
             await onSync(report)
         }
     }
@@ -460,6 +483,15 @@ public actor Account {
             _ = record(await tryRoute(route) { try await self.sync(host: peer.host, port: peer.port) })
         }
 
+        let joined = ((try? loadCommunities()) ?? []).filter { $0.role == .member || $0.role == .pending }
+        // A community's owner, seen on the local network, serves it.
+        for peer in peers where peer.device != deviceID {
+            for state in joined where state.decodedProfile?.owner == peer.user {
+                let route = "\(state.decodedProfile?.name ?? "community") on the local network (\(peer.host):\(peer.port))"
+                _ = record(await tryRoute(route) { try await self.sync(host: peer.host, port: peer.port, target: state.community) })
+            }
+        }
+
         for pod in endpoints.pods {
             let route = "my pod at \(pod.host):\(pod.port)"
             _ = record(await tryRoute(route) { try await self.sync(host: pod.host, port: Int(pod.port)) })
@@ -484,7 +516,50 @@ public actor Account {
                 }
             }
         }
+
+        for state in joined where !reached.contains(state.community) {
+            guard let identity = try? await store.verifiedIdentity(for: state.community) else { continue }
+            let name = state.decodedProfile?.name ?? "community"
+            var done = false
+            // Pending members must reach the owner: pods don't take join requests.
+            for pod in identity.endpoints.pods where !done && state.role == .member {
+                let route = "\(name) on its pod at \(pod.host):\(pod.port)"
+                done = record(await tryRoute(route) {
+                    try await self.sync(host: pod.host, port: Int(pod.port), target: state.community)
+                })
+            }
+            for direct in identity.endpoints.direct where !done {
+                let route = "\(name) at \(direct.host):\(direct.port)"
+                done = record(await tryRoute(route) {
+                    try await self.sync(host: direct.host, port: Int(direct.port), target: state.community)
+                })
+            }
+            let devices = identity.certificates.values.filter { $0.capabilities.contains(.author) }
+            for relay in identity.endpoints.relays where !done {
+                for device in devices where !done {
+                    let route = "\(name) via relay \(relay.host):\(relay.port)"
+                    done = record(await tryRoute(route) {
+                        try await self.sync(via: relay, to: device.agreementKey, identity: state.community)
+                    })
+                }
+            }
+        }
+        try? await processCommunities()
         return attempts
+    }
+
+    /// Answers an incoming session as ourselves, or as a community we
+    /// sequence if that's who the peer asked for, then absorbs what arrived.
+    public func respond(over channel: some MessageChannel) async throws -> SyncReport {
+        let me = user
+        let report = try await SyncEngine.respond(over: channel) { target in
+            guard let target, target != me else { return await self.syncEngine() }
+            guard (try? await self.community(target).role) == .owner else { return nil }
+            return try await self.communityEngine(target)
+        }
+        try await absorbKeyGrants()
+        try await processCommunities()
+        return report
     }
 
     private func tryRoute(_ route: String, _ operation: @Sendable () async throws -> SyncReport) async -> SyncAttempt {
@@ -524,6 +599,14 @@ struct Files {
     var keyring: URL { account.appendingPathComponent("keyring.cbor") }
     var clock: URL { account.appendingPathComponent("clock.cbor") }
     var preferences: URL { account.appendingPathComponent("preferences.cbor") }
+    /// Communities we own or belong to (0600: holds community keys and MLS
+    /// join secrets).
+    var communities: URL { account.appendingPathComponent("communities.cbor") }
+    /// A random key that seals local secret state such as MLS groups (0600).
+    var storageKey: URL { account.appendingPathComponent("storage.key") }
+    func mlsState(_ community: UserID) -> URL {
+        account.appendingPathComponent("mls").appendingPathComponent(Base32.encode(community.multicodecBytes) + ".sealed")
+    }
     /// IDs of contributions already republished into our threads.
     var threads: URL { account.appendingPathComponent("threads.cbor") }
 

@@ -1,5 +1,5 @@
 {
-  "originHash" : "d2aad35568f2222ee76e57c80328d8919bd019ad125775fba40bfe68bfc9e0e4",
+  "originHash" : "02243bc9efb49d06688806edc80d0dd4b9d14a4f448482ec8911e2008732c1aa",
   "pins" : [
     {
       "identity" : "swift-argument-parser",
@@ -47,12 +47,30 @@
       }
     },
     {
+      "identity" : "swift-mls",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/germ-network/swift-mls.git",
+      "state" : {
+        "revision" : "e6e0350a80b6f6cfd2a2a7ec8124480b26b7adae",
+        "version" : "0.1.7"
+      }
+    },
+    {
       "identity" : "swift-nio",
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/apple/swift-nio.git",
       "state" : {
         "revision" : "6db9d9abd92ad7399b8a564cafbb87d3507245fa",
         "version" : "2.104.0"
+      }
+    },
+    {
+      "identity" : "swift-secret-bytes",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/germ-network/swift-secret-bytes.git",
+      "state" : {
+        "revision" : "4f7d36ba92cc594bd5487d9053c39b05fe9e0105",
+        "version" : "0.7.1"
       }
     },
     {
