@@ -3,6 +3,7 @@ import GtkKit
 import Foundation
 import CirclesCore
 import CirclesKit
+import CirclesSync
 import CirclesPresentation
 
 /// `--snapshot DIR [--photo FILE]`: drives the real app and saves each screen
@@ -87,6 +88,42 @@ enum Snapshot {
 
         app.showSettings()
         await save(app, "4-settings", in: directory)
+        app.back()
+
+        await communities(app, bob: bob, port: port, directory: directory)
+    }
+
+    /// Alice creates a private community; Bob asks to join, is let in, and
+    /// posts; his post reaches the community page through the app's listener.
+    private static func communities(_ app: AppController, bob: Account, port: Int, directory: String) async {
+        guard let list = app.showCommunities() else { return }
+        await save(app, "5a-communities-empty", in: directory)
+        await list.model.perform(.create(name: "Ridge Walkers", description: "Weekend hikes along the ridge, all paces welcome.",
+                                         visibility: .private, joinPolicy: .approval))
+        guard let community = list.model.state.opened else { check(false, "creating a community opened it"); return }
+        check(await waitFor { app.currentCommunityPage?.model.state.isOwner == true }, "the new community opened, owned by us")
+        guard let page = app.currentCommunityPage else { return }
+
+        await page.model.perform(.makeInvite)
+        guard let invite = page.model.state.invite else { check(false, "the Invite button made invite text"); return }
+        _ = try? await bob.joinCommunity(invite: invite)
+        _ = try? await bob.sync(host: "127.0.0.1", port: port, target: community)
+        await page.model.perform(.refresh)
+        check(page.model.state.requests.map(\.name) == ["Bob Marley"], "Bob's join request reached the community page")
+        await save(app, "5b-community-request", in: directory)
+
+        await page.model.perform(.approve(bob.user))
+        _ = try? await bob.sync(host: "127.0.0.1", port: port, target: community)
+        try? await bob.processCommunities()
+        _ = try? await bob.post(RichText(plain: "Count me in for Saturday. I'll bring the good trail mix."), toCommunity: community)
+        _ = try? await bob.sync(host: "127.0.0.1", port: port, target: community)
+        await page.model.perform(.refresh)
+        check(page.model.state.cards.first?.authorName == "Bob Marley", "Bob's post reached the community through the app's listener")
+        check(page.model.state.members.map(\.name) == ["Alice Liddell", "Bob Marley"], "the member list names both")
+        await save(app, "5c-community", in: directory)
+        app.back()
+        await list.model.perform(.load)
+        await save(app, "5d-communities", in: directory)
         app.back()
     }
 

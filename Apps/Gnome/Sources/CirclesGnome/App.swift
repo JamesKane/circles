@@ -20,6 +20,8 @@ final class AppController {
     private var composer: ComposerDialog?
     private(set) var notifier: Notifier!
     private(set) var openedPosts: [ObjectRef] = []
+    /// The community page shown last (snapshot self-test).
+    private(set) var currentCommunityPage: CommunityPage?
 
     init(application: UnsafeMutablePointer<AdwApplication>) {
         self.application = application
@@ -144,6 +146,36 @@ final class AppController {
         let page = PostPage(model: PostScreenModel(post: post, account: account), media: MediaLoader(account: account), app: self)
         pages.append(page)
         adw_navigation_view_push(g(navigation), g(page.widget))
+    }
+
+    @discardableResult
+    func showCommunities() -> CommunitiesPage? {
+        guard let account else { return nil }
+        let page = CommunitiesPage(model: CommunitiesScreenModel(account: account), app: self)
+        pages.append(page)
+        adw_navigation_view_push(g(navigation), g(page.widget))
+        return page
+    }
+
+    @discardableResult
+    func showCommunity(_ community: UserID) -> CommunityPage? {
+        guard let account else { return nil }
+        let page = CommunityPage(model: CommunityScreenModel(account: account, community: community, services: GnomeServices(window: window)),
+                                 media: MediaLoader(account: account), app: self)
+        currentCommunityPage = page
+        pages.append(page)
+        adw_navigation_view_push(g(navigation), g(page.widget))
+        // Like the Stream, the community refreshes when any sync brings news.
+        var seen = network?.state.newContentCount ?? 0
+        observe { [weak page, weak network] in
+            guard let page, let network else { return }
+            let count = network.state.newContentCount
+            if count != seen {
+                seen = count
+                page.model.send(.refresh)
+            }
+        }
+        return page
     }
 
     func showCircles() {
