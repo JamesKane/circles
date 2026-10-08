@@ -4,9 +4,10 @@ import CirclesPresentation
 /// The Stream: posts from your circles, newest first, with a circle filter.
 struct StreamView: View {
     let session: AppModel.Session
-    @State private var showingActivity = false
-    @State private var path: [PostRoute] = []
+    /// Owned by the main window, so a notification can open a post.
+    @Binding var path: [PostRoute]
     @State private var composing = false
+    @State private var deleting: PostCard?
 
     private var stream: StreamScreenModel { session.stream }
     private var network: NetworkModel { session.network }
@@ -20,13 +21,15 @@ struct StreamView: View {
                     PostPageView(route: route, session: session)
                 }
         }
-        .safeAreaInset(edge: .bottom, spacing: 0) { statusBar }
         .sheet(isPresented: $composing) {
             ComposerView(session: session) { stream.send(.refresh) }
         }
-        .task { await stream.perform(.refresh) }
-        // New content from any sync, incoming or outgoing, refreshes the Stream.
-        .onChange(of: network.state.newContentCount) { stream.send(.refresh) }
+        .confirmationDialog("Delete this post?", isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }),
+                            presenting: deleting) { card in
+            Button("Delete Post", role: .destructive) { stream.send(.delete(card.reference)) }
+        } message: { _ in
+            Text("It's removed for everyone, along with its comments and +1s, as they sync.")
+        }
     }
 
     @ViewBuilder private var content: some View {
@@ -57,6 +60,13 @@ struct StreamView: View {
                                      onReshare: { path.append(PostRoute(post: card.reference, reshare: true)) })
                             .contentShape(.rect)
                             .onTapGesture { path.append(PostRoute(post: card.reference)) }
+                            .contextMenu {
+                                Button("Open Post") { path.append(PostRoute(post: card.reference)) }
+                                if card.canDelete {
+                                    Divider()
+                                    Button("Delete Post…", role: .destructive) { deleting = card }
+                                }
+                            }
                     }
                 }
                 .frame(maxWidth: 640)
@@ -97,41 +107,5 @@ struct StreamView: View {
                 .keyboardShortcut("r")
             }
         }
-    }
-
-    private var statusBar: some View {
-        TimelineView(.periodic(from: .now, by: 30)) { context in
-            HStack {
-                Text(network.state.summary(now: context.date))
-                Spacer()
-                Button("Activity", systemImage: "list.bullet.rectangle") { showingActivity.toggle() }
-                    .labelStyle(.iconOnly)
-                    .buttonStyle(.borderless)
-                    .help("Network activity")
-                    .popover(isPresented: $showingActivity, arrowEdge: .top) { activity }
-            }
-            .font(.footnote)
-            .foregroundStyle(.secondary)
-            .padding(.horizontal)
-            .padding(.vertical, 6)
-        }
-        .background(.bar)
-    }
-
-    private var activity: some View {
-        Group {
-            if network.state.activity.isEmpty {
-                Text("No network activity yet.")
-                    .foregroundStyle(.secondary)
-                    .padding()
-            } else {
-                List(Array(network.state.activity.enumerated()), id: \.offset) { _, line in
-                    Text(line)
-                        .font(.callout.monospaced())
-                        .textSelection(.enabled)
-                }
-            }
-        }
-        .frame(width: 460, height: 280)
     }
 }

@@ -14,6 +14,7 @@ struct PostCardView: View {
     let onPlusOne: () -> Void
     var onOpen: () -> Void = {}
     var onReshare: () -> Void = {}
+    var onRemoveComment: (CommentRow) -> Void = { _ in }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -91,7 +92,27 @@ struct PostCardView: View {
     private var thread: some View {
         VStack(alignment: .leading, spacing: 10) {
             ForEach(card.comments) { comment in
-                CommentView(comment: comment)
+                // A visible menu as well as the context menu: right-clicking
+                // the comment's (selectable) text shows the text menu instead.
+                HStack(alignment: .top) {
+                    CommentView(comment: comment)
+                    Spacer(minLength: 0)
+                    if comment.canRemove {
+                        Menu("Comment Actions", systemImage: "ellipsis") {
+                            Button("Remove Comment…", role: .destructive) { onRemoveComment(comment) }
+                        }
+                        .labelStyle(.iconOnly)
+                        .menuStyle(.borderlessButton)
+                        .menuIndicator(.hidden)
+                        .fixedSize()
+                        .foregroundStyle(.secondary)
+                    }
+                }
+                .contextMenu {
+                    if comment.canRemove {
+                        Button("Remove Comment…", role: .destructive) { onRemoveComment(comment) }
+                    }
+                }
             }
             if !card.canComment {
                 Text("Comments are turned off.")

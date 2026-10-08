@@ -1,8 +1,9 @@
 import AppKit
 import SwiftUI
+import UserNotifications
 
 /// The SwiftUI app (docs/DESIGN.md §11.6): one window over the shared
-/// CirclesPresentation screen models.
+/// CirclesPresentation screen models, and a Settings window.
 @main
 struct CirclesApp: App {
     @NSApplicationDelegateAdaptor private var delegate: AppDelegate
@@ -10,16 +11,21 @@ struct CirclesApp: App {
     var body: some Scene {
         Window("Circles", id: "main") {
             RootView(app: delegate.app)
-                .frame(minWidth: 520, minHeight: 600)
+                .frame(minWidth: 720, minHeight: 600)
         }
-        .defaultSize(width: 760, height: 900)
+        .defaultSize(width: 960, height: 900)
+
+        Settings {
+            SettingsView(app: delegate.app)
+        }
     }
 }
 
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate {
     let app = AppModel()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        UNUserNotificationCenter.current().delegate = self
         Task { await app.launch() }
     }
 
@@ -36,5 +42,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             sender.reply(toApplicationShouldTerminate: true)
         }
         return .terminateLater
+    }
+
+    /// A clicked notification opens its post.
+    nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse) async {
+        guard let post = Notifier.post(from: response.notification.request.content.userInfo) else { return }
+        await MainActor.run {
+            NSApp.activate()
+            app.postToOpen = post
+        }
     }
 }

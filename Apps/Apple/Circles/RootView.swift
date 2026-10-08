@@ -12,7 +12,7 @@ struct RootView: View {
         case .onboarding(let model):
             OnboardingView(model: model) { app.start($0) }
         case .ready(let session):
-            StreamView(session: session)
+            MainView(app: app, session: session)
         case .failed(let message):
             ContentUnavailableView {
                 Label("Couldn't open your account", systemImage: "exclamationmark.triangle")

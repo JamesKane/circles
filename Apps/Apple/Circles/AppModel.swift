@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import CirclesCore
 import CirclesKit
 import CirclesPresentation
 
@@ -19,10 +20,16 @@ final class AppModel {
         let account: Account
         let network: NetworkModel
         let stream: StreamScreenModel
+        let people: PeopleScreenModel
+        let circles: CirclesScreenModel
+        let settings: SettingsScreenModel
         let media: MediaLoader
     }
 
     private(set) var phase: Phase = .loading
+    /// A post to show, e.g. from a clicked notification. The main window
+    /// opens it and clears this.
+    var postToOpen: ObjectRef?
     let home: URL
 
     init(home: URL = AppModel.defaultHome()) {
@@ -38,9 +45,11 @@ final class AppModel {
         return URL.applicationSupportDirectory.appending(path: "Circles", directoryHint: .isDirectory)
     }
 
-    var network: NetworkModel? {
-        if case .ready(let session) = phase { session.network } else { nil }
+    var session: Session? {
+        if case .ready(let session) = phase { session } else { nil }
     }
+
+    var network: NetworkModel? { session?.network }
 
     func launch() async {
         guard case .loading = phase else { return }
@@ -58,8 +67,13 @@ final class AppModel {
     /// Shows the main UI and goes online.
     func start(_ account: Account) {
         if case .ready = phase { return }
+        let services = MacServices()
         let session = Session(account: account, network: NetworkModel(account: account),
-                              stream: StreamScreenModel(account: account), media: MediaLoader(account: account))
+                              stream: StreamScreenModel(account: account),
+                              people: PeopleScreenModel(account: account, services: services),
+                              circles: CirclesScreenModel(account: account),
+                              settings: SettingsScreenModel(account: account, services: services),
+                              media: MediaLoader(account: account))
         phase = .ready(session)
         session.network.send(.start)
     }
